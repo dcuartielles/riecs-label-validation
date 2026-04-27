@@ -60,3 +60,4 @@ async def auth_google_callback(request: Request):
 async def logout(request: Request):
     request.session.clear()
     return RedirectResponse(url="/login", status_code=302)
+
