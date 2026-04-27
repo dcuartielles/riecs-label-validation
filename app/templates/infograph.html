@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+{% block title %}Infographs{% endblock %}
+{% block content %}
+
+<h1>Label co-occurrence map</h1>
+<p class="muted" style="margin-bottom:1.25rem;line-height:1.6">
+  Each node is a label; lines connect labels that appear together on the same story.
+  Thicker lines = more co-occurrences. Node size reflects how often a label appears.
+  Hover nodes and lines for details. Drag nodes to rearrange. Scroll to zoom.
+</p>
+
+<div style="display:flex;gap:1rem;align-items:center;margin-bottom:1rem;flex-wrap:wrap">
+  <label style="font-size:0.88rem;font-weight:600;color:var(--navy)">Show:</label>
+  <select id="filter-select" style="width:auto;min-width:0;padding:0.35rem 0.6rem">
+    <option value="all">All labels from spreadsheet</option>
+    <option value="confirmed">Confirmed labels only</option>
+  </select>
+  <span id="graph-stats" class="muted" style="font-size:0.82rem"></span>
+</div>
+
+<div id="graph-wrap" style="
+  background:var(--white);border-radius:12px;
+  box-shadow:0 2px 8px rgba(44,50,76,0.07);
+  overflow:hidden;position:relative;
+">
+  <svg id="graph-svg" style="width:100%;height:68vh;display:block"></svg>
+  <div id="tip" style="
+    position:absolute;pointer-events:none;opacity:0;
+    background:var(--navy);color:#fff;
+    padding:0.45rem 0.7rem;border-radius:7px;
+    font-size:0.8rem;line-height:1.45;max-width:230px;
+    box-shadow:0 2px 10px rgba(0,0,0,0.28);
+    transition:opacity 0.1s;z-index:20;
+  "></div>
+</div>
+
+<div id="legend" style="margin-top:0.9rem;display:flex;flex-wrap:wrap;gap:0.45rem"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<script>
+(function () {
+  const wrap    = document.getElementById("graph-wrap");
+  const svgEl   = document.getElementById("graph-svg");
+  const tip     = document.getElementById("tip");
+  const statsEl = document.getElementById("graph-stats");
+  const legend  = document.getElementById("legend");
+  const sel     = document.getElementById("filter-select");
+
+  let sim;
+
+  /* ── tooltip helpers ─────────────────────────────────────────────────── */
+  function showTip(event, html) {
+    tip.innerHTML = html;
+    tip.style.opacity = "1";
+    moveTip(event);
+  }
+  function moveTip(event) {
+    const r = wrap.getBoundingClientRect();
+    let x = event.clientX - r.left + 14;
+    let y = event.clientY - r.top  - 10;
+    if (x + 240 > r.width)  x = event.clientX - r.left - 244;
+    if (y + 80  > r.height) y = event.clientY - r.top  - 70;
+    tip.style.left = x + "px";
+    tip.style.top  = y + "px";
+  }
+  function hideTip() { tip.style.opacity = "0"; }
+
+  /* ── main draw ───────────────────────────────────────────────────────── */
+  async function draw(filter) {
+    const svg = d3.select(svgEl);
+    svg.selectAll("*").remove();
+    legend.innerHTML = "";
+    statsEl.textContent = "Loading…";
+    if (sim) sim.stop();
+
+    const data = await fetch(`/infograph/data?filter=${filter}`).then(r => r.json());
+    const { nodes, links, categories } = data;
+
+    if (!nodes.length) {
+      statsEl.textContent = "No data to display.";
+      return;
+    }
+
+    statsEl.textContent = `${nodes.length} labels · ${links.length} connections`;
+
+    const W = svgEl.clientWidth;
+    const H = svgEl.clientHeight;
+
+    const maxFreq   = d3.max(nodes, d => d.frequency)  || 1;
+    const maxWeight = d3.max(links, d => d.weight)      || 1;
+    const nodeR  = d => 5 + (d.frequency  / maxFreq)   * 20;
+    const linkW  = d => 1 + (d.weight     / maxWeight)  * 9;
+    const linkOp = d => 0.25 + (d.weight  / maxWeight)  * 0.55;
+
+    /* zoom */
+    const g = svg.append("g");
+    svg.call(
+      d3.zoom().scaleExtent([0.2, 5])
+        .on("zoom", e => g.attr("transform", e.transform))
+    );
+
+    /* links */
+    const linkSel = g.append("g")
+      .selectAll("line")
+      .data(links)
+      .join("line")
+        .attr("stroke", "#8aabbb")
+        .attr("stroke-width", d => linkW(d))
+        .attr("stroke-opacity", d => linkOp(d))
+        .attr("stroke-linecap", "round")
+        .style("cursor", "default")
+        .on("mouseover", (ev, d) => showTip(ev,
+          `<strong>${d.source.id ?? d.source}</strong>
+           &nbsp;+&nbsp;
+           <strong>${d.target.id ?? d.target}</strong>
+           <br>Co-occurs in <strong>${d.weight}</strong>
+           ${d.weight === 1 ? "story" : "stories"}`))
+        .on("mousemove", moveTip)
+        .on("mouseout",  hideTip);
+
+    /* nodes */
+    const nodeSel = g.append("g")
+      .selectAll("circle")
+      .data(nodes)
+      .join("circle")
+        .attr("r",            d => nodeR(d))
+        .attr("fill",         d => d.color)
+        .attr("stroke",       "#fff")
+        .attr("stroke-width", 1.5)
+        .style("cursor", "grab")
+        .on("mouseover", (ev, d) => showTip(ev,
+          `<strong>${d.label}</strong>
+           ${d.category ? `<br><span style="opacity:.75;font-size:.75rem">${d.category}</span>` : ""}
+           <br>Appears in <strong>${d.frequency}</strong>
+           ${d.frequency === 1 ? "story" : "stories"}`))
+        .on("mousemove", moveTip)
+        .on("mouseout",  hideTip)
+        .call(d3.drag()
+          .on("start", (ev, d) => {
+            if (!ev.active) sim.alphaTarget(0.3).restart();
+            d.fx = d.x; d.fy = d.y;
+          })
+          .on("drag",  (ev, d) => { d.fx = ev.x; d.fy = ev.y; })
+          .on("end",   (ev, d) => {
+            if (!ev.active) sim.alphaTarget(0);
+            d.fx = null; d.fy = null;
+          })
+        );
+
+    /* simulation */
+    sim = d3.forceSimulation(nodes)
+      .force("link", d3.forceLink(links).id(d => d.id)
+        .distance(d => 70 + (maxWeight - d.weight) * 3)
+        .strength(0.45))
+      .force("charge",    d3.forceManyBody().strength(-180))
+      .force("center",    d3.forceCenter(W / 2, H / 2))
+      .force("collision", d3.forceCollide().radius(d => nodeR(d) + 4))
+      .on("tick", () => {
+        linkSel
+          .attr("x1", d => d.source.x)
+          .attr("y1", d => d.source.y)
+          .attr("x2", d => d.target.x)
+          .attr("y2", d => d.target.y);
+        nodeSel
+          .attr("cx", d => d.x)
+          .attr("cy", d => d.y);
+      });
+
+    /* legend */
+    categories.forEach(cat => {
+      const s = document.createElement("span");
+      s.style.cssText =
+        "display:inline-flex;align-items:center;gap:0.3rem;" +
+        "font-size:0.78rem;padding:0.2rem 0.55rem;" +
+        "background:var(--white);border-radius:4px;border:1px solid var(--border)";
+      s.innerHTML =
+        `<span style="width:9px;height:9px;border-radius:50%;` +
+        `background:${cat.color};flex-shrink:0"></span>${cat.name}`;
+      legend.appendChild(s);
+    });
+  }
+
+  sel.addEventListener("change", () => draw(sel.value));
+  draw("all");
+})();
+</script>
+
+{% endblock %}

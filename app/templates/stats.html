@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Session statistics{% endblock %}
+{% block content %}
+
+<div class="stats-layout">
+
+  <!-- Session history sidebar -->
+  <aside class="session-sidebar">
+    <h3>Sessions</h3>
+    {% if all_sessions %}
+      <ul class="session-list">
+        {% for s in all_sessions %}
+        <li class="session-item {% if selected_session and s.id == selected_session.id %}active{% endif %}">
+          <a href="/stats?session_id={{ s.id }}">
+            <span class="session-group">{{ s.group.name }}</span>
+            <span class="session-date">{{ s.started_at.strftime('%d %b %Y') }}</span>
+            <span class="session-time">{{ s.started_at.strftime('%H:%M') }}
+              {% if s.ended_at %} – {{ s.ended_at.strftime('%H:%M') }}{% else %}
+              <span class="session-live">live</span>{% endif %}
+            </span>
+            {% if not s.ended_at %}<span class="session-badge">active</span>{% endif %}
+          </a>
+        </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted" style="font-size:0.85rem">No sessions yet.</p>
+    {% endif %}
+  </aside>
+
+  <!-- Main content -->
+  <div class="stats-main">
+
+    {% if selected_session %}
+    <h1>
+      {{ selected_session.group.name }} &mdash;
+      {{ selected_session.started_at.strftime('%d %b %Y, %H:%M') }}
+      {% if selected_session.ended_at %}
+        <span class="session-ended-badge">ended</span>
+      {% else %}
+        <span class="session-live-badge">live</span>
+      {% endif %}
+    </h1>
+    {% else %}
+    <h1>Statistics</h1>
+    {% endif %}
+
+    {% for gs in group_stats %}
+    <section class="stats-section">
+      <h2>{{ gs.group.name }}</h2>
+      <div class="stats-grid">
+        <div class="stat-card">
+          <span class="stat-number">{{ gs.stories_reviewed }}</span>
+          <span class="stat-label">Stories reviewed</span>
+          <span class="stat-sub">of {{ gs.total_assigned }} assigned</span>
+        </div>
+        <div class="stat-card confirm">
+          <span class="stat-number">{{ gs.confirmed }}</span>
+          <span class="stat-label">Labels confirmed</span>
+        </div>
+        <div class="stat-card reject">
+          <span class="stat-number">{{ gs.rejected }}</span>
+          <span class="stat-label">Labels rejected</span>
+        </div>
+        <div class="stat-card added">
+          <span class="stat-number">{{ gs.new_labels }}</span>
+          <span class="stat-label">New labels added</span>
+        </div>
+      </div>
+    </section>
+    {% endfor %}
+
+    {% if overlap_count %}
+    <section class="stats-section">
+      <h2>Cross-group overlap</h2>
+      <p><strong>{{ overlap_count }}</strong> stories were reviewed by more than one group.</p>
+      <p><a href="/admin">View details in the admin panel →</a></p>
+    </section>
+    {% endif %}
+
+    <div class="nav-buttons">
+      <a href="/review" class="btn btn-nav">← Back to review</a>
+      <div style="display:flex;gap:0.75rem">
+        {% if selected_session %}
+          <a href="/export?session_id={{ selected_session.id }}" class="btn btn-add">Download results (XLSX)</a>
+        {% else %}
+          <a href="/export" class="btn btn-add">Download results (XLSX)</a>
+        {% endif %}
+        {% if not selected_session or not selected_session.ended_at %}
+        <form method="post" action="/session/end"
+              onsubmit="return confirm('End the current session? You can still review afterwards but stats will reset for a new session.')">
+          <button type="submit" class="btn btn-reject">End session</button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+
+  </div><!-- /stats-main -->
+</div><!-- /stats-layout -->
+
+{% endblock %}

@@ -1,0 +1,23 @@
+# Secrets & local config
+.env
+
+# Research data (not for version control)
+input_data/
+
+# Runtime database (recreate with scripts/import_data.py)
+*.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Claude Code project memory
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db

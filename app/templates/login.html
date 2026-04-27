@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Login{% endblock %}
+{% block content %}
+<div class="login-box">
+  <img src="/static/riecs-logo.png" alt="RIECS concept" class="login-logo">
+  <p>Sign in with your Google account to continue.</p>
+  {% if google_configured %}
+    <a href="/auth/google" class="btn btn-google">Sign in with Google</a>
+  {% else %}
+    <p class="warning">Google OAuth is not configured.<br>
+    <a href="/dev-login">Use dev login →</a></p>
+  {% endif %}
+  {% if request.query_params.get('error') %}
+    <p class="error">Authentication failed. Please try again.</p>
+  {% endif %}
+</div>
+{% endblock %}

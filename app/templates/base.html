@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Label Validation{% endblock %}</title>
+  <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16.png">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<script src="/static/app.js" defer></script>
+  <header>
+    <nav>
+      <img src="/static/riecs-glyph.png" alt="RIECS concept" class="nav-logo">
+      <span class="nav-subtitle">Label Validation</span>
+      {% if user %}
+        <span class="user-info">{{ user.name }}{% if user.group %} · {{ user.group.name }}{% endif %}</span>
+        <div class="nav-links">
+          <a href="/review">Review</a>
+          <a href="/stats">Statistics</a>
+          <a href="/infograph">Infographs</a>
+          {% if user.is_admin %}<a href="/admin">Admin</a>{% endif %}
+          <a href="/logout">Log out</a>
+        </div>
+      {% endif %}
+    </nav>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

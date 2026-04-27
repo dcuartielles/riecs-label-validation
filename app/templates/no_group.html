@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Waiting for group assignment{% endblock %}
+{% block content %}
+<div class="centered">
+  <h2>Welcome, {{ user.name }}</h2>
+  <p>Your account has been created. An administrator needs to assign you to a group before you can start reviewing.</p>
+  <p>Please ask your session facilitator to assign your group in the <a href="/admin">admin panel</a>.</p>
+</div>
+{% endblock %}

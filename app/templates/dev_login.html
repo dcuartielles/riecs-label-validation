@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Dev Login{% endblock %}
+{% block content %}
+<div class="login-box">
+  <h1>Dev Login</h1>
+  <p class="warning">This page is only available when Google OAuth is not configured.</p>
+
+  {% if users %}
+    <form method="post" action="/dev-login" style="margin-top:1.5rem">
+      <select name="user_id" style="width:100%;margin-bottom:1rem;padding:0.5rem;border:2px solid #e2e8f0;border-radius:6px">
+        {% for u in users %}
+          <option value="{{ u.id }}">{{ u.name }} ({{ u.email }}){% if u.is_admin %} — admin{% endif %}{% if u.group_id %} · Group {{ u.group_id }}{% endif %}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="btn btn-google" style="background:#4361ee;color:#fff;border-color:#3451d1">
+        Log in as selected user
+      </button>
+    </form>
+  {% else %}
+    <p style="margin-top:1rem">No users in the database yet.<br>
+    Run: <code>python -m scripts.create_admin your@email.com</code></p>
+  {% endif %}
+</div>
+{% endblock %}

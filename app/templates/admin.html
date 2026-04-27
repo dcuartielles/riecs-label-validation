@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}Admin{% endblock %}
+{% block content %}
+
+<h1>Admin panel</h1>
+
+<section class="admin-section">
+  <h2>Group progress</h2>
+  <table class="admin-table">
+    <thead>
+      <tr><th>Group</th><th>Assigned stories</th><th>Stories reviewed</th></tr>
+    </thead>
+    <tbody>
+      {% for group in groups %}
+      <tr>
+        <td>{{ group.name }}</td>
+        <td>{{ progress[group.id].total }}</td>
+        <td>{{ progress[group.id].decided }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="admin-section">
+  <h2>Users</h2>
+  <table class="admin-table">
+    <thead>
+      <tr><th>Name</th><th>Email</th><th>Group</th><th>Admin</th></tr>
+    </thead>
+    <tbody>
+      {% for u in users %}
+      <tr>
+        <td>{{ u.name }}</td>
+        <td>{{ u.email }}</td>
+        <td>
+          <form method="post" action="/admin/assign-group">
+            <input type="hidden" name="user_id" value="{{ u.id }}">
+            <select name="group_id" onchange="this.form.submit()">
+              <option value="0" {% if not u.group_id %}selected{% endif %}>— none —</option>
+              {% for g in groups %}
+                <option value="{{ g.id }}" {% if u.group_id == g.id %}selected{% endif %}>{{ g.name }}</option>
+              {% endfor %}
+            </select>
+          </form>
+        </td>
+        <td>
+          <form method="post" action="/admin/set-admin">
+            <input type="hidden" name="user_id" value="{{ u.id }}">
+            <input type="checkbox" name="is_admin" {% if u.is_admin %}checked{% endif %}
+                   onchange="this.form.submit()">
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+{% if comparison %}
+<section class="admin-section">
+  <h2>Cross-group comparison <span class="muted">({{ comparison | length }} overlapping stories)</span></h2>
+  <table class="admin-table comparison-table">
+    <thead>
+      <tr>
+        <th>Story ID</th>
+        {% for group in groups %}<th colspan="3">{{ group.name }}</th>{% endfor %}
+      </tr>
+      <tr>
+        <th></th>
+        {% for group in groups %}
+          <th class="sub confirm">✓</th>
+          <th class="sub reject">✗</th>
+          <th class="sub abstain">—</th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in comparison %}
+      <tr>
+        <td><strong>{{ row.story_id }}</strong></td>
+        {% for group in groups %}
+          {% set gdata = row.groups | selectattr("group", "equalto", group.name) | first | default(none) %}
+          {% if gdata %}
+            <td class="num confirm">{{ gdata.confirm }}</td>
+            <td class="num reject">{{ gdata.reject }}</td>
+            <td class="num abstain">{{ gdata.abstain }}</td>
+          {% else %}
+            <td class="num muted" colspan="3">not reviewed</td>
+          {% endif %}
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% else %}
+<section class="admin-section">
+  <h2>Cross-group comparison</h2>
+  <p class="muted">No stories have been reviewed by more than one group yet.</p>
+</section>
+{% endif %}
+
+{% endblock %}

@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}Review · Story {{ pos + 1 }} of {{ total }}{% endblock %}
+{% block content %}
+
+<div class="review-layout">
+
+  <!-- Progress bar -->
+  <div class="progress-bar-wrap">
+    <div class="progress-bar" style="width: {{ ((pos + 1) / total * 100) | round(1) }}%"></div>
+    <span class="progress-label">{{ pos + 1 }} / {{ total }}</span>
+  </div>
+
+  <!-- Story card -->
+  <div class="story-card">
+    <div class="story-meta">
+      <span class="story-id">{{ story.story_id }}</span>
+      {% if story.user_type %}<span class="badge">{{ story.user_type }}</span>{% endif %}
+      {% if story.stakeholder_group %}<span class="badge muted">{{ story.stakeholder_group }}</span>{% endif %}
+    </div>
+
+    {% if story.task %}
+    <div class="story-field">
+      <label>Task</label>
+      <p>{{ story.task }}</p>
+    </div>
+    {% endif %}
+
+    {% if story.goal %}
+    <div class="story-field">
+      <label>Goal</label>
+      <p>{{ story.goal }}</p>
+    </div>
+    {% endif %}
+
+    {% if story.additional_notes %}
+    <div class="story-field">
+      <label>Notes</label>
+      <p>{{ story.additional_notes }}</p>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Existing labels -->
+  <div class="labels-section">
+    <h2>Existing labels — confirm or reject each one</h2>
+
+    {% if labels %}
+      <div class="label-list">
+        {% for lbl in labels %}
+        <div class="label-row {% if decisions.get(lbl.id) %}decided-{{ decisions[lbl.id] }}{% endif %}">
+          <div class="label-info">
+            <span class="source-badge source-{{ lbl.source | lower }}">{{ lbl.source }}</span>
+            {% set desc = label_descriptions.get(lbl.id) %}
+            <span class="label-text{% if desc %} has-tooltip{% endif %}"
+                  {% if desc %}data-tooltip="{{ desc }}"{% endif %}>{{ lbl.label_text }}</span>
+          </div>
+          <div class="label-actions">
+            <form method="post" action="/review/decide">
+              <input type="hidden" name="story_id" value="{{ story.id }}">
+              <input type="hidden" name="story_label_id" value="{{ lbl.id }}">
+              <input type="hidden" name="pos" value="{{ pos }}">
+              <button type="submit" name="decision" value="confirm"
+                class="btn btn-confirm {% if decisions.get(lbl.id) == 'confirm' %}active{% endif %}">
+                Confirm
+              </button>
+              <button type="submit" name="decision" value="reject"
+                class="btn btn-reject {% if decisions.get(lbl.id) == 'reject' %}active{% endif %}">
+                Reject
+              </button>
+              <button type="submit" name="decision" value="abstain"
+                class="btn btn-abstain {% if decisions.get(lbl.id) == 'abstain' %}active{% endif %}">
+                Abstain
+              </button>
+            </form>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="muted">No existing labels for this story.</p>
+    {% endif %}
+  </div>
+
+  <!-- Add a label -->
+  <div class="add-label-section">
+    <h2>Add a label from the taxonomy</h2>
+
+    <form method="post" action="/review/add-label" class="add-label-form">
+      <input type="hidden" name="story_id" value="{{ story.id }}">
+      <input type="hidden" name="pos" value="{{ pos }}">
+
+      <script id="tax-data" type="application/json">{{ tax_json | safe }}</script>
+
+      <div class="form-row">
+        <select name="taxonomy_label_id" id="taxonomy-select">
+          <option value="">— select a label —</option>
+          {% for top_label, sublabels in tax_tree.items() %}
+            <optgroup label="{{ top_label }}">
+              {% for t in sublabels %}
+                <option value="{{ t.id }}">{{ t.sublabel }}</option>
+              {% endfor %}
+            </optgroup>
+          {% endfor %}
+        </select>
+
+        <input type="text" name="note" placeholder="Optional note" class="note-input">
+        <button type="submit" class="btn btn-add">Add label</button>
+      </div>
+
+      <div id="label-description" class="label-description" style="display:none"></div>
+    </form>
+
+    {% if added %}
+    <div class="added-labels">
+      <h3>Labels added this session</h3>
+      {% for a in added %}
+      <div class="added-label-row">
+        <span>
+          {% if a.taxonomy_label %}
+            <strong>{{ a.taxonomy_label.label }}</strong>
+            {% if a.taxonomy_label.sublabel %} › {{ a.taxonomy_label.sublabel }}{% endif %}
+          {% elif a.free_text %}
+            {{ a.free_text }}
+          {% endif %}
+          {% if a.note %}<em class="muted"> — {{ a.note }}</em>{% endif %}
+        </span>
+        <form method="post" action="/review/remove-added-label" style="display:inline">
+          <input type="hidden" name="added_label_id" value="{{ a.id }}">
+          <input type="hidden" name="pos" value="{{ pos }}">
+          <button type="submit" class="btn btn-remove">Remove</button>
+        </form>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Navigation -->
+  <div class="nav-buttons">
+    {% if pos > 0 %}
+      <a href="/review?pos={{ pos - 1 }}" class="btn btn-nav">← Previous</a>
+    {% else %}
+      <span class="btn btn-nav disabled">← Previous</span>
+    {% endif %}
+
+    {% if pos < total - 1 %}
+      <a href="/review?pos={{ pos + 1 }}" class="btn btn-nav btn-next">Next →</a>
+    {% else %}
+      <a href="/stats" class="btn btn-nav btn-finish">View session statistics →</a>
+    {% endif %}
+  </div>
+
+</div>
+{% endblock %}
