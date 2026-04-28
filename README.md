@@ -1,8 +1,32 @@
 # RIECS Label Validation
 
-A collaborative web application for research groups to validate AI- and human-generated labels on user stories. Designed for use in moderated remote sessions where multiple groups review the same dataset and produce a reconciled, annotated Excel export.
+A collaborative web application for research groups to validate AI- and human-generated labels on user stories. Designed for use in moderated, time-boxed workshops where multiple groups review the same dataset in parallel and produce a reconciled, annotated Excel export.
 
 Built for the [RIECS](https://riecs.eu) pan-European citizen science research infrastructure project.
+
+---
+
+## Architecture
+
+The facilitator runs the application on their own machine and exposes it to all participants through an **ngrok tunnel**. No server or cloud infrastructure is required beyond a free ngrok account.
+
+```mermaid
+flowchart LR
+    subgraph host ["Facilitator's machine"]
+        app["FastAPI app\nlocalhost:8000"]
+        agent["ngrok agent"]
+    end
+
+    app <-->|local| agent
+    agent <-->|"encrypted tunnel"| cloud["ngrok cloud\nyour‑domain.ngrok‑free.app"]
+
+    cloud -->|HTTPS| ga["Group A\nbrowsers"]
+    cloud -->|HTTPS| gb["Group B\nbrowsers"]
+    cloud -->|HTTPS| gc["Group C\nbrowsers"]
+    cloud -->|HTTPS| adm["Admin\nbrowser"]
+```
+
+All traffic flows through a single HTTPS endpoint. Participants need only a browser and the shared URL — no installation, no accounts beyond Google login.
 
 ---
 
@@ -10,79 +34,112 @@ Built for the [RIECS](https://riecs.eu) pan-European citizen science research in
 
 ### 1. Login
 
-Participants sign in with their Google account. No password or account creation required — any Google account can be added to the system by an administrator.
+Participants sign in with their Google account. No password or account creation is required — the admin pre-registers participants by email so their group assignment is already in place when they first log in.
 
 ![Login page](docs/screenshots/01-login.png)
 
 ---
 
-### 2. Review stories one by one
+### 2. Waiting for the session to start
 
-After login, researchers are taken straight to the review queue. Stories are shown one at a time, in the order assigned to their group.
+Before the facilitator opens the session, participants who navigate to the review page see a waiting screen. This prevents any reviewing before the session is officially started.
 
-![Review page](docs/screenshots/02-review.png)
+![Waiting page](docs/screenshots/02-waiting.png)
+
+---
+
+### 3. Review stories one by one
+
+Once the session is started, researchers are taken to the review queue. Stories are shown one at a time in the order assigned to their group. A progress bar at the top tracks how far through the queue they have reached.
+
+![Review page](docs/screenshots/03-review.png)
 
 Each story card shows:
 - **Story ID** and metadata (user type, stakeholder group)
-- **Task** and **Goal** fields from the original user story
-- **Existing labels** — both Human and AI generated — each with Confirm / Reject / Abstain buttons
+- **Task** and **Goal** from the original user story
+- **Existing labels** — both Human- and AI-generated — each with **Confirm / Reject / Abstain** buttons
 
-**Confirming a label** means the group agrees it belongs to this story.  
-**Rejecting** means the group disagrees.  
-**Abstaining** records that the group reviewed it but chose not to decide.
+Hovering over a label (dashed underline) shows its taxonomy description.
 
-Hovering over a label shows its taxonomy description (dashed underline = description available).
+#### Adding labels from the taxonomy
 
-Researchers can also **add new labels** from the taxonomy using the dropdown below the existing labels. An optional free-text note can accompany each addition. Labels added in error can be removed before moving on.
+Below the existing labels, researchers can add further labels from a dropdown that mirrors the full taxonomy hierarchy. An optional note can accompany each addition. Labels added in error can be removed before moving on.
 
-Navigation buttons at the bottom step through the queue. The progress bar at the top shows how far through the assigned stories the group has reached.
+#### Creating new taxonomy labels
 
----
+If no suitable label exists in the taxonomy, researchers can propose one in the **"Create a new taxonomy label"** section:
 
-### 3. Track progress in Statistics
+1. Select a top-level category from the dropdown (or choose **Other** to create a new category).
+2. Type the new label name.
+3. Click **Check EU terms** — the system queries the [EuroVoc](https://eurovoc.europa.eu) EU terminology database and shows matching terms with **use this** buttons. Checking is mandatory before the **Create & add to story** button becomes active.
+4. Click **Create & add to story**.
 
-The Statistics page shows a live summary of the current session — how many stories have been reviewed, and how many labels were confirmed, rejected, or newly added.
-
-![Statistics page](docs/screenshots/03-stats.png)
-
-The **session sidebar** on the left lists all past and active sessions for the group. Clicking any session shows its stats in the main area. Each session is timestamped; active sessions are marked **live**, completed ones **ended**.
-
-The **Download results (XLSX)** button exports the full annotated spreadsheet for the selected session. The export mirrors the original input file layout with colour highlights:
-- **Yellow** — rows that were reviewed
-- **Green** — confirmed labels and new additions
-- **Red** — rejected labels
-
-Administrators also see a cross-group overlap count when multiple groups have reviewed the same stories.
-
-The **End session** button closes the current session and preserves its stats for future reference. A new session starts automatically the next time the group opens the review page.
+Created labels are tracked separately under **"Labels created this session"**, distinct from labels merely added from the existing taxonomy.
 
 ---
 
-### 4. Explore the label co-occurrence map
+### 4. Track progress in Statistics
+
+The Statistics page shows a live summary per group for the selected session.
+
+![Statistics page](docs/screenshots/04-stats.png)
+
+The **session sidebar** lists all past and active sessions. Each session shows the date and time; active sessions are marked **live**, completed ones **ended**.
+
+Five stat cards per group show:
+| Card | Meaning |
+|---|---|
+| Stories reviewed | Distinct stories with at least one decision |
+| Labels confirmed | Total confirm decisions |
+| Labels rejected | Total reject decisions |
+| New labels added | Labels picked from existing taxonomy and added |
+| Labels created | Brand-new taxonomy labels proposed and created |
+
+Two download buttons are available:
+- **Download results (XLSX)** — annotated spreadsheet for the selected session, colour-coded by decision
+- **Download revised labelbook (XLSX)** — the full taxonomy including all user-created labels, ready to carry forward to the next workshop
+
+---
+
+### 5. Explore the label co-occurrence map
 
 The Infographs page shows a force-directed network of all labels in the dataset.
 
-![Infograph page](docs/screenshots/04-infograph.png)
+![Infograph page](docs/screenshots/05-infograph.png)
 
-- **Nodes** represent labels; size reflects how frequently a label appears across stories
-- **Edges** connect labels that appear on the same story; thickness and opacity reflect how many stories share that pair
+- **Nodes** represent labels; size reflects frequency across stories
+- **Edges** connect labels that appear on the same story; thickness reflects co-occurrence count
 - **Node colour** indicates the taxonomy top-level category (legend shown below the graph)
 - **Hover a node** to see its name, category, and story count
-- **Hover an edge** to see which two labels it connects and how many stories they share together
+- **Hover an edge** to see the two labels it connects and their co-occurrence count
 - **Drag nodes** to rearrange; scroll to zoom
-- Toggle between **All labels** (from the original spreadsheet) and **Confirmed labels only** using the dropdown
+- Toggle between **All labels** and **Confirmed labels only** using the dropdown
 
 ---
 
-### 5. Admin panel
+### 6. Admin panel
 
-Administrators have access to the Admin panel, where they can:
+Administrators have access to the Admin panel.
 
-![Admin page](docs/screenshots/05-admin.png)
+![Admin page](docs/screenshots/06-admin.png)
 
-- See all registered users and assign them to review groups
-- Monitor per-group progress (stories reviewed, labels confirmed/rejected/added)
-- Inspect cross-group overlap: stories reviewed by more than one group, with a side-by-side breakdown of each group's decisions per label
+#### Session control
+
+The facilitator starts and ends the session for all groups from here. While a session is live, all participants can review. When ended, the waiting screen is shown until a new session is started.
+
+#### Group progress
+
+A table shows, per group, how many stories have been reviewed in the **current** session (not a lifetime total).
+
+#### Users
+
+Pre-register participants before the workshop by entering their name, email address, and group. When they log in with Google for the first time, their group assignment is already in place.
+
+Existing users can be reassigned to different groups or promoted to admin via the same table. Users can also be removed.
+
+#### Cross-group comparison
+
+When the same story has been reviewed by more than one group, a comparison table shows each group's confirm / reject / abstain counts side by side — useful for spotting disagreements during the post-session discussion.
 
 ---
 
@@ -92,7 +149,7 @@ Administrators have access to the Admin panel, where they can:
 
 - Python 3.11+
 - A Google Cloud project with OAuth 2.0 credentials ([guide](https://developers.google.com/identity/protocols/oauth2))
-- An ngrok account (or any HTTPS tunnel / public server) for the OAuth redirect URI
+- An [ngrok](https://ngrok.com) account (free tier is sufficient) with a static domain
 
 ### Installation
 
@@ -106,21 +163,21 @@ pip install -r requirements.txt
 
 ### Configuration
 
-Copy `.env.example` to `.env` and fill in your values:
+Create a `.env` file in the project root:
 
 ```env
 GOOGLE_CLIENT_ID=your-google-client-id
 GOOGLE_CLIENT_SECRET=your-google-client-secret
 SECRET_KEY=a-long-random-string
 DATABASE_URL=sqlite+aiosqlite:///./labelling.db
-BASE_URL=https://your-public-domain.ngrok-free.app
+BASE_URL=https://your-domain.ngrok-free.app
 ```
 
-In your Google Cloud Console, add `https://your-public-domain/auth/google/callback` as an **Authorised redirect URI**.
+In your Google Cloud Console, add `https://your-domain.ngrok-free.app/auth/google/callback` as an **Authorised redirect URI**.
 
 ### Import data
 
-Place your stories spreadsheet in `input_data/` and your taxonomy file in `labelbook/`, then run:
+Place the stories spreadsheet in `input_data/` and the taxonomy file in `labelbook/`, then run:
 
 ```bash
 python -m scripts.import_data
@@ -134,19 +191,39 @@ Add `--reset` to wipe and reimport from scratch.
 python -m scripts.create_admin your@email.com
 ```
 
-Log in once via Google first so the user record exists.
+This can be run before the first login — the account will be linked to your Google identity when you sign in.
 
-### Run
+### Pre-register participants (optional but recommended)
+
+Log in as admin, open the **Admin panel**, and use the **Add user** form to enter each participant's name, email, and group. They will land in the correct group the moment they log in — no waiting for the admin to assign them during the session.
+
+### Run the application
 
 ```bash
 python run.py
 ```
 
-The app starts on `http://localhost:8000`. Expose it via ngrok:
+The app starts on `http://localhost:8000`. In a second terminal, expose it via ngrok:
 
 ```bash
 ngrok http --domain=your-domain.ngrok-free.app 8000
 ```
+
+Share the ngrok URL with participants. Start the session from the Admin panel when everyone is ready.
+
+---
+
+## Facilitator checklist
+
+- [ ] Import data (`python -m scripts.import_data`)
+- [ ] Create admin account (`python -m scripts.create_admin`)
+- [ ] Start the app (`python run.py`) and the ngrok tunnel
+- [ ] Pre-register participants in the Admin panel
+- [ ] Share the ngrok URL
+- [ ] Click **Start session** when ready to begin
+- [ ] Monitor progress on the Admin panel and Stats page
+- [ ] Click **End session** when time is up
+- [ ] Download results from the Stats page
 
 ---
 
@@ -154,17 +231,25 @@ ngrok http --domain=your-domain.ngrok-free.app 8000
 
 ```
 app/
-  routers/       FastAPI route handlers (auth, review, stats, admin, export, infograph)
-  templates/     Jinja2 HTML templates
-  static/        CSS, JS, images, favicon
-  models.py      SQLAlchemy ORM models
-  auth.py        Google OAuth setup
-  database.py    Async SQLAlchemy engine
+  routers/        FastAPI route handlers
+    auth.py         Google OAuth login/logout
+    review.py       Story review, label decisions, EuroVoc lookup
+    stats.py        Session statistics
+    admin.py        Session control, user and group management
+    export.py       XLSX export (results + revised labelbook)
+    infograph.py    Force-directed label co-occurrence graph
+  templates/      Jinja2 HTML templates
+  static/         CSS, favicon, images
+  models.py       SQLAlchemy ORM models
+  auth.py         OAuth helpers and session management
+  database.py     Async SQLAlchemy engine + DB migrations
 scripts/
-  import_data.py   Load stories + taxonomy + assign groups
-  create_admin.py  Promote a user to admin
-labelbook/       Taxonomy spreadsheet
-docs/            Screenshots and supplementary materials
+  import_data.py    Load stories, taxonomy, and group assignments
+  create_admin.py   Create or promote a user to admin
+  take_screenshots.py  Automated README screenshot capture
+labelbook/        Taxonomy spreadsheet
+input_data/       Source stories spreadsheet (git-ignored)
+docs/             Screenshots and supplementary materials
 ```
 
 ---
@@ -176,12 +261,17 @@ docs/            Screenshots and supplementary materials
 | Backend | [FastAPI](https://fastapi.tiangolo.com) + [uvicorn](https://www.uvicorn.org) |
 | Database | SQLite via [SQLAlchemy](https://www.sqlalchemy.org) (async / aiosqlite) |
 | Auth | Google OAuth 2.0 via [Authlib](https://docs.authlib.org) |
-| Templates | [Jinja2](https://jinja.palletsprojects.com) (server-rendered, no JS framework) |
+| Templates | [Jinja2](https://jinja.palletsprojects.com) (server-rendered) |
 | Export | [openpyxl](https://openpyxl.readthedocs.io) |
 | Visualisation | [D3.js](https://d3js.org) v7 (force-directed graph) |
+| Terminology | [EuroVoc](https://eurovoc.europa.eu) via EU Publications Office SPARQL endpoint |
+| Tunnel | [ngrok](https://ngrok.com) |
 
 ---
 
 ## License
 
-This project was developed as part of the RIECS project. Contact the project team for licensing details.
+This project is licensed under the **GNU General Public License v3.0**.  
+See [LICENSE](LICENSE) for the full text.
+
+Developed as part of the [RIECS](https://riecs.eu) pan-European citizen science research infrastructure project.
