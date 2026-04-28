@@ -7,7 +7,7 @@ from app.auth import get_current_user
 from app.database import SessionLocal
 from app.models import (
     AddedLabel, Group, GroupAssignment, LabelDecision,
-    Session as ReviewSession, User, UserStory
+    Session as ReviewSession, TaxonomyLabel, User, UserStory
 )
 
 router = APIRouter()
@@ -82,6 +82,13 @@ async def stats(request: Request, session_id: int | None = None):
                 .where(added_filter)
             )).scalar()
 
+            created_labels = (await db.execute(
+                select(func.count(func.distinct(AddedLabel.taxonomy_label_id)))
+                .join(User, AddedLabel.user_id == User.id)
+                .join(TaxonomyLabel, AddedLabel.taxonomy_label_id == TaxonomyLabel.id)
+                .where(and_(added_filter, TaxonomyLabel.is_user_created == True))
+            )).scalar()
+
             group_stats.append({
                 "group": group,
                 "total_assigned": total_assigned,
@@ -89,6 +96,7 @@ async def stats(request: Request, session_id: int | None = None):
                 "confirmed": confirmed,
                 "rejected": rejected,
                 "new_labels": new_labels,
+                "created_labels": created_labels,
             })
 
         # Cross-group overlap (admin only)

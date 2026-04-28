@@ -258,6 +258,16 @@ main { max-width: 860px; margin: 0 auto; padding: 2rem 1rem; }
 
 .label-actions form { display: flex; gap: 0.4rem; }
 
+/* ── Add user form (admin) ── */
+.add-user-form {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+.add-user-form .note-input { flex: 1; min-width: 140px; }
+
 /* ── Add label form ── */
 .add-label-form .form-row {
   display: flex;
@@ -414,7 +424,7 @@ select {
 /* ── Stats ── */
 .stats-section { margin-bottom: 2rem; }
 .stats-section h2 { margin-bottom: 1rem; color: var(--navy); }
-.stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.6rem; }
+.stats-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.6rem; }
 .stat-card {
   background: var(--white);
   border-radius: 10px;
@@ -425,15 +435,28 @@ select {
   align-items: center;
   text-align: center;
 }
-.stat-card.confirm { border-top: 3px solid var(--sage); }
-.stat-card.reject  { border-top: 3px solid #c0392b; }
-.stat-card.added   { border-top: 3px solid var(--teal); }
+.stat-card.confirm  { border-top: 3px solid var(--sage); }
+.stat-card.reject   { border-top: 3px solid #c0392b; }
+.stat-card.added    { border-top: 3px solid var(--teal); }
+.stat-card.created  { border-top: 3px solid #8e44ad; }
 .stat-number { font-size: 1.75rem; font-weight: 700; color: var(--navy); }
 .stat-label  { font-size: 0.78rem; color: var(--muted); margin-top: 0.15rem; }
 .stat-sub    { font-size: 0.7rem; color: #aab5bf; margin-top: 0.05rem; }
 
 /* ── Utilities ── */
 .muted { color: var(--muted); }
+
+.btn-use-this {
+  font-size: 0.72rem;
+  padding: 0.1rem 0.45rem;
+  border: 1px solid var(--teal);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--teal);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn-use-this:hover { background: var(--teal); color: #fff; }
 .warning { color: #7a4a10; background: #fef6e8; padding: 0.5rem; border-radius: 6px; }
 .error   { color: #7a2020; }
 .centered { text-align: center; margin-top: 4rem; }

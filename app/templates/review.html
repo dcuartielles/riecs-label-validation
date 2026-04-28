@@ -133,6 +133,27 @@
       {% endfor %}
     </div>
     {% endif %}
+
+    {% if added_created %}
+    <div class="added-labels" style="margin-top:0.75rem">
+      <h3>Labels created this session</h3>
+      {% for a in added_created %}
+      <div class="added-label-row">
+        <span>
+          <strong>{{ a.taxonomy_label.label }}</strong>
+          {% if a.taxonomy_label.sublabel %} › {{ a.taxonomy_label.sublabel }}{% endif %}
+          <span class="badge" style="font-size:0.7rem;margin-left:0.4rem">new</span>
+          {% if a.note %}<em class="muted"> — {{ a.note }}</em>{% endif %}
+        </span>
+        <form method="post" action="/review/remove-added-label" style="display:inline">
+          <input type="hidden" name="added_label_id" value="{{ a.id }}">
+          <input type="hidden" name="pos" value="{{ pos }}">
+          <button type="submit" class="btn btn-remove">Remove</button>
+        </form>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
   </div>
 
   <!-- Create a new taxonomy label -->
@@ -140,20 +161,43 @@
     <h2>Create a new taxonomy label</h2>
     <p class="muted" style="font-size:0.85rem;margin-bottom:1rem">
       Use this only if the label you need does not exist in the taxonomy above.
-      The system will check for similar existing labels and look up the term in the
-      <a href="https://eurovoc.europa.eu" target="_blank">EuroVoc EU terminology database</a>.
+      You must check the term against the
+      <a href="https://eurovoc.europa.eu" target="_blank">EuroVoc EU terminology database</a>
+      before saving.
     </p>
 
-    <div style="display:flex;gap:0.6rem;margin-bottom:0.75rem;flex-wrap:wrap">
-      <input id="new-toplabel" type="text" placeholder="Top-level category (e.g. Citizen Science Approaches)"
-             class="note-input" style="flex:2;min-width:200px">
-      <input id="new-sublabel" type="text" placeholder="New label name"
-             class="note-input" style="flex:2;min-width:160px">
-      <button type="button" class="btn btn-nav" onclick="checkEuroVoc()">Check EU terms</button>
+    <!-- Row 1: category dropdown -->
+    <div style="margin-bottom:0.6rem">
+      <select id="category-select" onchange="onCategoryChange()" style="width:100%">
+        <option value="">— select a top-level category —</option>
+        {% for cat in tax_categories %}
+          <option value="{{ cat }}">{{ cat }}</option>
+        {% endfor %}
+        <option value="__other__">Other (create new category)</option>
+      </select>
     </div>
 
+    <!-- "Other" category row (hidden until selected) -->
+    <div id="other-category-row" style="display:none;margin-bottom:0.6rem">
+      <div style="display:flex;gap:0.6rem;flex-wrap:wrap;align-items:center">
+        <input id="other-category-input" type="text" placeholder="New category name"
+               class="note-input" style="flex:1" oninput="onOtherCategoryInput()">
+        <button type="button" class="btn btn-nav" onclick="checkCategory()">Check EU terms</button>
+      </div>
+      <div id="category-eurovoc-result" style="margin-top:0.5rem"></div>
+    </div>
+
+    <!-- Row 2: new label name + EuroVoc check -->
+    <div style="display:flex;gap:0.6rem;margin-bottom:0.6rem;flex-wrap:wrap;align-items:center">
+      <input id="new-sublabel" type="text" placeholder="New label name"
+             class="note-input" style="flex:1" oninput="onSublabelInput()">
+      <button type="button" class="btn btn-nav" onclick="checkSublabel()">Check EU terms</button>
+    </div>
+
+    <!-- EuroVoc results for sublabel -->
     <div id="eurovoc-result" style="display:none;margin-bottom:0.75rem"></div>
 
+    <!-- Submit form — button locked until EuroVoc checked -->
     <form method="post" action="/review/create-taxonomy-label" id="create-label-form">
       <input type="hidden" name="story_id" value="{{ story.id }}">
       <input type="hidden" name="pos" value="{{ pos }}">
@@ -162,7 +206,9 @@
       <input type="hidden" name="description" id="hidden-description">
       <div style="display:flex;gap:0.6rem;flex-wrap:wrap">
         <input type="text" name="note" placeholder="Optional note" class="note-input" style="flex:1">
-        <button type="submit" class="btn btn-add" onclick="return prepareCreate()">Create &amp; add to story</button>
+        <button type="submit" id="create-btn" class="btn btn-add"
+                style="opacity:0.35;pointer-events:none" disabled
+                onclick="return prepareCreate()">Create &amp; add to story</button>
       </div>
     </form>
   </div>
@@ -185,31 +231,60 @@
 </div>
 
 <script>
-async function checkEuroVoc() {
-  const term = document.getElementById("new-sublabel").value.trim();
-  const box  = document.getElementById("eurovoc-result");
-  if (!term) { box.style.display = "none"; return; }
+let sublabelChecked = false;
+let categoryChecked = false;
 
-  box.style.display = "block";
-  box.innerHTML = '<span class="muted">Looking up EuroVoc…</span>';
+function updateCreateButton() {
+  const btn = document.getElementById("create-btn");
+  const ready = sublabelChecked && categoryChecked;
+  btn.disabled = !ready;
+  btn.style.opacity = ready ? "1" : "0.35";
+  btn.style.pointerEvents = ready ? "auto" : "none";
+}
 
-  const data = await fetch(`/api/eurovoc?term=${encodeURIComponent(term)}`).then(r => r.json());
+function onCategoryChange() {
+  const sel = document.getElementById("category-select");
+  const otherRow = document.getElementById("other-category-row");
+  if (sel.value === "__other__") {
+    otherRow.style.display = "block";
+    categoryChecked = false;
+  } else {
+    otherRow.style.display = "none";
+    categoryChecked = sel.value !== "";
+  }
+  updateCreateButton();
+}
+
+function onOtherCategoryInput() {
+  categoryChecked = false;
+  updateCreateButton();
+}
+
+function onSublabelInput() {
+  sublabelChecked = false;
+  updateCreateButton();
+}
+
+function buildEuroVocHtml(data, inputId, type) {
+  const inputEl = document.getElementById(inputId);
+  const term = inputEl ? inputEl.value : "";
   let html = "";
-
   if (data.matches && data.matches.length) {
     html += `<div class="label-description" style="margin-bottom:0.5rem">
       <strong>EuroVoc terms matching "${term}":</strong><br>
       ${data.matches.map(m =>
-        `<a href="#" style="color:var(--teal);margin-right:0.5rem"
-            onclick="useEuroVoc(this,'${m.replace(/'/g,"\\'")}');return false">${m}</a>`
-      ).join(" &nbsp; ")}
+        `<span style="display:inline-flex;align-items:center;gap:0.35rem;margin:0.2rem 0.5rem 0.2rem 0">
+          <span>${m}</span>
+          <button type="button" class="btn-use-this"
+              onclick="useEuroVoc('${inputId}','${m.replace(/'/g,"\\'")}','${type}')">use this</button>
+        </span>`
+      ).join("")}
     </div>`;
   } else {
     html += `<div class="label-description" style="margin-bottom:0.5rem;border-color:var(--muted)">
-      No EuroVoc match found for "<em>${term}</em>".
+      No EuroVoc match found for "<em>${term}</em>". You may still proceed.
     </div>`;
   }
-
   if (data.duplicates && data.duplicates.length) {
     html += `<div class="warning" style="margin-bottom:0.5rem">
       <strong>Similar existing labels:</strong><br>
@@ -218,21 +293,70 @@ async function checkEuroVoc() {
       ).join("")}
     </div>`;
   }
-
-  box.innerHTML = html;
+  return html;
 }
 
-function useEuroVoc(el, term) {
-  document.getElementById("new-sublabel").value = term;
+function useEuroVoc(inputId, term, type) {
+  document.getElementById(inputId).value = term;
+  if (type === "sublabel") { sublabelChecked = true; }
+  else { categoryChecked = true; }
+  updateCreateButton();
+}
+
+async function checkSublabel() {
+  const term = document.getElementById("new-sublabel").value.trim();
+  const box = document.getElementById("eurovoc-result");
+  if (!term) { box.style.display = "none"; return; }
+  box.style.display = "block";
+  box.innerHTML = '<span class="muted">Looking up EuroVoc…</span>';
+  const data = await fetch(`/api/eurovoc?term=${encodeURIComponent(term)}`).then(r => r.json());
+  box.innerHTML = buildEuroVocHtml(data, "new-sublabel", "sublabel");
+  sublabelChecked = true;
+  updateCreateButton();
+}
+
+async function checkCategory() {
+  const term = document.getElementById("other-category-input").value.trim();
+  const box = document.getElementById("category-eurovoc-result");
+  if (!term) { box.innerHTML = ""; return; }
+  box.innerHTML = '<span class="muted">Looking up EuroVoc…</span>';
+  const data = await fetch(`/api/eurovoc?term=${encodeURIComponent(term)}`).then(r => r.json());
+  box.innerHTML = buildEuroVocHtml(data, "other-category-input", "category");
+  categoryChecked = true;
+  updateCreateButton();
 }
 
 function prepareCreate() {
-  const top = document.getElementById("new-toplabel").value.trim();
+  const sel = document.getElementById("category-select");
   const sub = document.getElementById("new-sublabel").value.trim();
+  let top;
+  if (sel.value === "__other__") {
+    top = document.getElementById("other-category-input").value.trim();
+  } else {
+    top = sel.value;
+  }
   if (!top || !sub) { alert("Please fill in both the category and the new label name."); return false; }
   document.getElementById("hidden-toplabel").value = top;
   document.getElementById("hidden-sublabel").value = sub;
   return true;
 }
+
+// Taxonomy select — show description on change (existing behaviour)
+document.addEventListener("DOMContentLoaded", function () {
+  const sel = document.getElementById("taxonomy-select");
+  const taxData = JSON.parse(document.getElementById("tax-data").textContent);
+  const descBox = document.getElementById("label-description");
+  if (sel) {
+    sel.addEventListener("change", function () {
+      const entry = taxData[this.value];
+      if (entry && entry.description) {
+        descBox.textContent = entry.description;
+        descBox.style.display = "block";
+      } else {
+        descBox.style.display = "none";
+      }
+    });
+  }
+});
 </script>
 {% endblock %}

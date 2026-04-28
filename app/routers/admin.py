@@ -44,17 +44,20 @@ async def admin(request: Request):
         groups = (await db.execute(select(Group))).scalars().all()
         active_session = await get_active_session(db)
 
-        # Progress per group
+        # Progress per group — scoped to the active session
         progress = {}
         for group in groups:
             total_q = await db.execute(
                 select(func.count(GroupAssignment.id))
                 .where(GroupAssignment.group_id == group.id)
             )
+            decided_where = [User.group_id == group.id]
+            if active_session:
+                decided_where.append(LabelDecision.session_id == active_session.id)
             decided_q = await db.execute(
                 select(func.count(func.distinct(LabelDecision.story_id)))
                 .join(User, LabelDecision.user_id == User.id)
-                .where(User.group_id == group.id)
+                .where(*decided_where)
             )
             progress[group.id] = {
                 "total": total_q.scalar(),
@@ -114,6 +117,7 @@ async def admin(request: Request):
         "progress": progress,
         "comparison": comparison,
         "active_session": active_session,
+        "add_user_error": None,
     })
 
 
@@ -142,6 +146,49 @@ async def end_session(request: Request):
         session = await get_active_session(db)
         if session:
             session.ended_at = datetime.utcnow()
+            await db.commit()
+
+    return RedirectResponse(url="/admin", status_code=302)
+
+
+@router.post("/admin/add-user")
+async def add_user(
+    request: Request,
+    name: str = Form(...),
+    email: str = Form(...),
+    group_id: int = Form(0),
+):
+    user = await require_admin(request)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+
+    email = email.strip().lower()
+    async with SessionLocal() as db:
+        existing = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
+        if not existing:
+            db.add(User(
+                name=name.strip(),
+                email=email,
+                group_id=group_id if group_id != 0 else None,
+            ))
+            await db.commit()
+
+    return RedirectResponse(url="/admin", status_code=302)
+
+
+@router.post("/admin/remove-user")
+async def remove_user(
+    request: Request,
+    user_id: int = Form(...),
+):
+    user = await require_admin(request)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+
+    async with SessionLocal() as db:
+        target = await db.get(User, user_id)
+        if target and target.id != user.id:  # can't remove yourself
+            await db.delete(target)
             await db.commit()
 
     return RedirectResponse(url="/admin", status_code=302)

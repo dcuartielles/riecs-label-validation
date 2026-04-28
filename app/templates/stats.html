@@ -66,6 +66,10 @@
           <span class="stat-number">{{ gs.new_labels }}</span>
           <span class="stat-label">New labels added</span>
         </div>
+        <div class="stat-card created">
+          <span class="stat-number">{{ gs.created_labels }}</span>
+          <span class="stat-label">Labels created</span>
+        </div>
       </div>
     </section>
     {% endfor %}
@@ -86,6 +90,7 @@
         {% else %}
           <a href="/export" class="btn btn-add">Download results (XLSX)</a>
         {% endif %}
+        <a href="/export/labelbook" class="btn btn-nav">Download revised labelbook (XLSX)</a>
       </div>
     </div>
 

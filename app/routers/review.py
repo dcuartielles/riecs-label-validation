@@ -82,7 +82,14 @@ async def review(request: Request, pos: int = 0):
                 )
             ).options(selectinload(AddedLabel.taxonomy_label))
         )
-        added = added_result.scalars().all()
+        added_all = added_result.scalars().all()
+
+        uc_ids_result = await db.execute(
+            select(TaxonomyLabel.id).where(TaxonomyLabel.is_user_created == True)
+        )
+        user_created_ids = set(uc_ids_result.scalars().all())
+        added = [a for a in added_all if a.taxonomy_label_id not in user_created_ids]
+        added_created = [a for a in added_all if a.taxonomy_label_id in user_created_ids]
 
         tax_result = await db.execute(select(TaxonomyLabel).order_by(
             TaxonomyLabel.label, TaxonomyLabel.sublabel
@@ -112,18 +119,23 @@ async def review(request: Request, pos: int = 0):
             if desc:
                 label_descriptions[lbl.id] = desc
 
+        # Unique top-level categories for the "create label" dropdown
+        tax_categories = [cat for cat, subs in tax_tree.items() if subs]
+
         return templates.TemplateResponse(request, "review.html", {
             "user": user,
             "story": story,
             "labels": labels,
             "decisions": decisions,
             "added": added,
+            "added_created": added_created,
             "pos": pos,
             "total": total,
             "session_id": rev_session.id,
             "tax_json": json.dumps(tax_json),
             "tax_tree": tax_tree,
             "label_descriptions": label_descriptions,
+            "tax_categories": tax_categories,
         })
 
 
