@@ -12,7 +12,7 @@
         {% for s in all_sessions %}
         <li class="session-item {% if selected_session and s.id == selected_session.id %}active{% endif %}">
           <a href="/stats?session_id={{ s.id }}">
-            <span class="session-group">{{ s.group.name }}</span>
+            <span class="session-group">Session {{ s.id }}</span>
             <span class="session-date">{{ s.started_at.strftime('%d %b %Y') }}</span>
             <span class="session-time">{{ s.started_at.strftime('%H:%M') }}
               {% if s.ended_at %} – {{ s.ended_at.strftime('%H:%M') }}{% else %}
@@ -33,7 +33,7 @@
 
     {% if selected_session %}
     <h1>
-      {{ selected_session.group.name }} &mdash;
+      Session {{ selected_session.id }} &mdash;
       {{ selected_session.started_at.strftime('%d %b %Y, %H:%M') }}
       {% if selected_session.ended_at %}
         <span class="session-ended-badge">ended</span>
@@ -85,12 +85,6 @@
           <a href="/export?session_id={{ selected_session.id }}" class="btn btn-add">Download results (XLSX)</a>
         {% else %}
           <a href="/export" class="btn btn-add">Download results (XLSX)</a>
-        {% endif %}
-        {% if not selected_session or not selected_session.ended_at %}
-        <form method="post" action="/session/end"
-              onsubmit="return confirm('End the current session? You can still review afterwards but stats will reset for a new session.')">
-          <button type="submit" class="btn btn-reject">End session</button>
-        </form>
         {% endif %}
       </div>
     </div>

@@ -4,6 +4,31 @@
 
 <h1>Admin panel</h1>
 
+<!-- ── Session control ── -->
+<section class="admin-section">
+  <h2>Session control</h2>
+  <div style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap">
+    {% if active_session %}
+      <div style="display:flex;align-items:center;gap:0.6rem">
+        <span class="session-live-badge">live</span>
+        <span style="font-size:0.95rem">
+          Session started {{ active_session.started_at.strftime('%d %b %Y at %H:%M') }}
+        </span>
+      </div>
+      <form method="post" action="/session/end"
+            onsubmit="return confirm('End the session for all groups? This cannot be undone.')">
+        <button type="submit" class="btn btn-reject">End session for everyone</button>
+      </form>
+    {% else %}
+      <span class="muted" style="font-size:0.95rem">No active session — all groups see the waiting screen.</span>
+      <form method="post" action="/session/start">
+        <button type="submit" class="btn btn-finish">Start session</button>
+      </form>
+    {% endif %}
+  </div>
+</section>
+
+<!-- ── Group progress ── -->
 <section class="admin-section">
   <h2>Group progress</h2>
   <table class="admin-table">
@@ -22,6 +47,7 @@
   </table>
 </section>
 
+<!-- ── Users ── -->
 <section class="admin-section">
   <h2>Users</h2>
   <table class="admin-table">
@@ -57,6 +83,7 @@
   </table>
 </section>
 
+<!-- ── Cross-group comparison ── -->
 {% if comparison %}
 <section class="admin-section">
   <h2>Cross-group comparison <span class="muted">({{ comparison | length }} overlapping stories)</span></h2>
@@ -100,5 +127,14 @@
   <p class="muted">No stories have been reviewed by more than one group yet.</p>
 </section>
 {% endif %}
+
+<!-- ── Export ── -->
+<section class="admin-section">
+  <h2>Export</h2>
+  <div style="display:flex;gap:0.75rem;flex-wrap:wrap">
+    <a href="/export" class="btn btn-add">Download results (XLSX)</a>
+    <a href="/export/labelbook" class="btn btn-nav">Download revised labelbook (XLSX)</a>
+  </div>
+</section>
 
 {% endblock %}

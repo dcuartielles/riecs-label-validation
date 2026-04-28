@@ -1,10 +1,12 @@
 import json
-from datetime import datetime
+from difflib import SequenceMatcher
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select, and_
 from sqlalchemy.orm import selectinload
+import httpx
+
 from app.auth import get_current_user
 from app.database import SessionLocal
 from app.models import (
@@ -15,20 +17,16 @@ from app.models import (
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
 
+SPARQL_ENDPOINT = "https://publications.europa.eu/webapi/rdf/sparql"
 
-async def get_or_create_session(db, group_id: int) -> ReviewSession:
+
+async def get_active_session(db) -> ReviewSession | None:
     result = await db.execute(
         select(ReviewSession)
-        .where(and_(ReviewSession.group_id == group_id,
-                    ReviewSession.ended_at.is_(None)))
+        .where(ReviewSession.ended_at.is_(None))
         .order_by(ReviewSession.started_at.desc())
     )
-    session = result.scalar_one_or_none()
-    if not session:
-        session = ReviewSession(group_id=group_id)
-        db.add(session)
-        await db.flush()
-    return session
+    return result.scalar_one_or_none()
 
 
 @router.get("/review", response_class=HTMLResponse)
@@ -40,7 +38,10 @@ async def review(request: Request, pos: int = 0):
         return templates.TemplateResponse(request, "no_group.html", {"user": user})
 
     async with SessionLocal() as db:
-        # Load this group's ordered subset
+        rev_session = await get_active_session(db)
+        if not rev_session:
+            return templates.TemplateResponse(request, "waiting.html", {"user": user})
+
         result = await db.execute(
             select(GroupAssignment)
             .where(GroupAssignment.group_id == user.group_id)
@@ -55,16 +56,11 @@ async def review(request: Request, pos: int = 0):
         pos = max(0, min(pos, total - 1))
         assignment = assignments[pos]
 
-        # Load story with its labels
         story = await db.get(UserStory, assignment.story_id)
         label_result = await db.execute(
             select(StoryLabel).where(StoryLabel.story_id == story.id)
         )
         labels = label_result.scalars().all()
-
-        # Load existing decisions for this story in the current session
-        rev_session = await get_or_create_session(db, user.group_id)
-        await db.commit()
 
         decisions_result = await db.execute(
             select(LabelDecision).where(
@@ -77,7 +73,6 @@ async def review(request: Request, pos: int = 0):
         )
         decisions = {d.story_label_id: d.decision for d in decisions_result.scalars()}
 
-        # Load added labels for this story in session
         added_result = await db.execute(
             select(AddedLabel).where(
                 and_(
@@ -89,16 +84,14 @@ async def review(request: Request, pos: int = 0):
         )
         added = added_result.scalars().all()
 
-        # Load taxonomy for the add-label panel
         tax_result = await db.execute(select(TaxonomyLabel).order_by(
             TaxonomyLabel.label, TaxonomyLabel.sublabel
         ))
         taxonomy = tax_result.scalars().all()
 
-        # Group taxonomy by top-level label
         tax_tree: dict[str, list] = {}
         tax_json: dict[str, dict] = {}
-        tax_desc: dict[str, str] = {}  # normalized text → description
+        tax_desc: dict[str, str] = {}
         for t in taxonomy:
             tax_tree.setdefault(t.label, [])
             if t.sublabel:
@@ -113,7 +106,6 @@ async def review(request: Request, pos: int = 0):
                     tax_desc[t.sublabel.strip().lower()] = t.description
                 tax_desc[t.label.strip().lower()] = t.description
 
-        # Map story_label.id → taxonomy description (for hover tooltips)
         label_descriptions: dict[int, str] = {}
         for lbl in labels:
             desc = tax_desc.get(lbl.label_text.strip().lower(), "")
@@ -146,12 +138,13 @@ async def decide(
     user = await get_current_user(request)
     if not user:
         return RedirectResponse(url="/login", status_code=302)
-
     if decision not in ("confirm", "reject", "abstain"):
         return JSONResponse({"error": "invalid decision"}, status_code=400)
 
     async with SessionLocal() as db:
-        rev_session = await get_or_create_session(db, user.group_id)
+        rev_session = await get_active_session(db)
+        if not rev_session:
+            return RedirectResponse(url="/review", status_code=302)
 
         result = await db.execute(
             select(LabelDecision).where(
@@ -192,7 +185,9 @@ async def add_label(
         return RedirectResponse(url="/login", status_code=302)
 
     async with SessionLocal() as db:
-        rev_session = await get_or_create_session(db, user.group_id)
+        rev_session = await get_active_session(db)
+        if not rev_session:
+            return RedirectResponse(url="/review", status_code=302)
         db.add(AddedLabel(
             session_id=rev_session.id,
             user_id=user.id,
@@ -225,24 +220,105 @@ async def remove_added_label(
     return RedirectResponse(url=f"/review?pos={pos}", status_code=302)
 
 
-@router.post("/session/end")
-async def end_session(request: Request):
+@router.post("/review/create-taxonomy-label")
+async def create_taxonomy_label(
+    request: Request,
+    story_id: int = Form(...),
+    top_label: str = Form(...),
+    sublabel: str = Form(...),
+    description: str = Form(""),
+    note: str = Form(""),
+    pos: int = Form(0),
+):
     user = await get_current_user(request)
     if not user:
         return RedirectResponse(url="/login", status_code=302)
 
-    async with SessionLocal() as db:
-        result = await db.execute(
-            select(ReviewSession)
-            .where(and_(
-                ReviewSession.group_id == user.group_id,
-                ReviewSession.ended_at.is_(None),
-            ))
-            .order_by(ReviewSession.started_at.desc())
-        )
-        session = result.scalar_one_or_none()
-        if session:
-            session.ended_at = datetime.utcnow()
-            await db.commit()
+    top_label = top_label.strip()
+    sublabel = sublabel.strip()
+    if not top_label or not sublabel:
+        return RedirectResponse(url=f"/review?pos={pos}", status_code=302)
 
-    return RedirectResponse(url="/stats", status_code=302)
+    async with SessionLocal() as db:
+        rev_session = await get_active_session(db)
+        if not rev_session:
+            return RedirectResponse(url="/review", status_code=302)
+
+        new_tax = TaxonomyLabel(
+            label=top_label,
+            sublabel=sublabel,
+            description=description.strip() or None,
+            is_user_created=True,
+        )
+        db.add(new_tax)
+        await db.flush()
+
+        db.add(AddedLabel(
+            session_id=rev_session.id,
+            user_id=user.id,
+            story_id=story_id,
+            taxonomy_label_id=new_tax.id,
+            note=note.strip() or None,
+        ))
+        await db.commit()
+
+    return RedirectResponse(url=f"/review?pos={pos}", status_code=302)
+
+
+@router.get("/api/eurovoc")
+async def eurovoc_lookup(request: Request, term: str = ""):
+    """Query EuroVoc via EU Publications SPARQL endpoint."""
+    user = await get_current_user(request)
+    if not user or not term.strip():
+        return JSONResponse({"matches": [], "duplicates": []})
+
+    term = term.strip()
+
+    # EuroVoc SPARQL lookup
+    sparql = f"""
+    PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+    SELECT DISTINCT ?prefLabel WHERE {{
+      ?concept a skos:Concept ;
+               skos:prefLabel ?prefLabel .
+      FILTER(lang(?prefLabel) = "en")
+      FILTER(strstarts(str(?concept), "http://eurovoc.europa.eu/"))
+      FILTER(contains(lcase(str(?prefLabel)), lcase("{term}")))
+    }}
+    LIMIT 6
+    """
+    eurovoc_matches = []
+    try:
+        async with httpx.AsyncClient(timeout=6.0) as client:
+            resp = await client.get(SPARQL_ENDPOINT, params={
+                "query": sparql,
+                "format": "application/sparql-results+json",
+            }, headers={"Accept": "application/sparql-results+json"})
+            if resp.status_code == 200:
+                data = resp.json()
+                eurovoc_matches = [
+                    b["prefLabel"]["value"]
+                    for b in data["results"]["bindings"]
+                ]
+    except Exception:
+        pass
+
+    # Fuzzy duplicate detection against existing taxonomy
+    async with SessionLocal() as db:
+        all_tax = (await db.execute(select(TaxonomyLabel))).scalars().all()
+
+    term_lower = term.lower()
+    duplicates = []
+    for t in all_tax:
+        candidates = [t.sublabel or "", t.label or ""]
+        for c in candidates:
+            ratio = SequenceMatcher(None, term_lower, c.lower()).ratio()
+            if ratio >= 0.75 and c:
+                duplicates.append({
+                    "label": t.label,
+                    "sublabel": t.sublabel or "",
+                    "similarity": round(ratio * 100),
+                })
+                break
+    duplicates.sort(key=lambda x: -x["similarity"])
+
+    return JSONResponse({"matches": eurovoc_matches, "duplicates": duplicates[:5]})

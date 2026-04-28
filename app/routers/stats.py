@@ -23,24 +23,12 @@ async def stats(request: Request, session_id: int | None = None):
     async with SessionLocal() as db:
         groups = (await db.execute(select(Group))).scalars().all()
 
-        # ── Session history ───────────────────────────────────────────────────
-        # Collect all sessions visible to this user
-        if user.is_admin:
-            all_sessions_q = await db.execute(
-                select(ReviewSession)
-                .options(selectinload(ReviewSession.group))
-                .order_by(ReviewSession.started_at.desc())
-            )
-        else:
-            all_sessions_q = await db.execute(
-                select(ReviewSession)
-                .options(selectinload(ReviewSession.group))
-                .where(ReviewSession.group_id == user.group_id)
-                .order_by(ReviewSession.started_at.desc())
-            )
-        all_sessions = all_sessions_q.scalars().all()
+        # All sessions (global, no group filter)
+        all_sessions = (await db.execute(
+            select(ReviewSession)
+            .order_by(ReviewSession.started_at.desc())
+        )).scalars().all()
 
-        # Determine which session to show — default to most recent
         selected_session = None
         if session_id:
             for s in all_sessions:
@@ -50,9 +38,7 @@ async def stats(request: Request, session_id: int | None = None):
         if not selected_session and all_sessions:
             selected_session = all_sessions[0]
 
-        # ── Stats for selected session ────────────────────────────────────────
         group_stats = []
-
         for group in groups:
             if not user.is_admin and group.id != user.group_id:
                 continue
@@ -62,7 +48,6 @@ async def stats(request: Request, session_id: int | None = None):
                 .where(GroupAssignment.group_id == group.id)
             )).scalar()
 
-            # Base filter: group + session
             session_filter = and_(
                 User.group_id == group.id,
                 LabelDecision.session_id == selected_session.id,
@@ -116,10 +101,10 @@ async def stats(request: Request, session_id: int | None = None):
                 )
                 .join(LabelDecision, LabelDecision.story_id == UserStory.id)
                 .join(User, LabelDecision.user_id == User.id)
-                .where(
-                    and_(User.group_id.isnot(None),
-                         LabelDecision.session_id == selected_session.id)
-                )
+                .where(and_(
+                    User.group_id.isnot(None),
+                    LabelDecision.session_id == selected_session.id,
+                ))
                 .group_by(UserStory.story_id)
                 .having(func.count(func.distinct(User.group_id)) > 1)
             )

@@ -1,9 +1,10 @@
 import io
-from pathlib import Path
+from collections import defaultdict
 from copy import copy
+from pathlib import Path
 
 import openpyxl
-from openpyxl.styles import PatternFill, Font, Alignment
+from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse, RedirectResponse
 from sqlalchemy import select
@@ -16,20 +17,20 @@ from app.models import AddedLabel, Group, LabelDecision, StoryLabel, TaxonomyLab
 router = APIRouter()
 
 DATASET_PATH = Path("input_data/unified_outcomes_v004_labelled_v002_UItest_v001.xlsx")
+LABELBOOK_PATH = Path("labelbook/Revised labelbook proposal for Oulu.xlsx")
 
 # ── Fill colours ──────────────────────────────────────────────────────────────
-FILL_YELLOW = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")  # reviewed row
-FILL_GREEN  = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")  # confirmed / added
-FILL_RED    = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")  # rejected
-FILL_HDR    = PatternFill(start_color="70AD47", end_color="70AD47", fill_type="solid")  # added-label header
+FILL_YELLOW      = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
+FILL_GREEN       = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+FILL_RED         = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+FILL_LT_GREEN    = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
+FILL_LT_RED      = PatternFill(start_color="FCE4D6", end_color="FCE4D6", fill_type="solid")
+FILL_HDR         = PatternFill(start_color="70AD47", end_color="70AD47", fill_type="solid")
+FILL_HDR_NEW     = PatternFill(start_color="375623", end_color="375623", fill_type="solid")
+FILL_STAT_HDR    = PatternFill(start_color="2C324C", end_color="2C324C", fill_type="solid")
+FILL_CONFLICT    = PatternFill(start_color="FCE4D6", end_color="FCE4D6", fill_type="solid")
 
-
-def label_col_index(source: str, label_index: int) -> int:
-    """Return 1-based column number for a label cell in the original spreadsheet."""
-    # Human label N → col 9 + 2*(N-1)   (9,11,13,15,17)
-    # AI label N    → col 10 + 2*(N-1)  (10,12,14,16,18)
-    base = 9 if source == "Human" else 10
-    return base + 2 * (label_index - 1)
+FONT_WHITE_BOLD  = Font(bold=True, color="FFFFFF")
 
 
 def copy_cell_style(src, dst):
@@ -39,86 +40,190 @@ def copy_cell_style(src, dst):
         dst.border    = copy(src.border)
 
 
-async def build_sheet(ws_src, story_decisions: dict, story_added: dict, group_name: str, wb_out):
+def label_col_info(col: int) -> tuple[str, int] | None:
+    """Return (source, label_index) for spreadsheet columns 9-18, else None."""
+    if col < 9:
+        return None
+    offset = col - 9
+    return ("Human" if offset % 2 == 0 else "AI", offset // 2 + 1)
+
+
+# ── Overview sheet (Sheet 1) ──────────────────────────────────────────────────
+
+def build_overview_sheet(ws_src, all_story_decisions: dict, story_added: dict, wb_out):
     """
-    Clone ws_src into a new sheet in wb_out, applying colour highlights.
-
-    story_decisions: {story_id_str: {(source, label_index): 'confirm'|'reject'|'abstain'}}
-    story_added:     {story_id_str: [{'label': ..., 'sublabel': ..., 'note': ...}]}
+    Sheet 1: full dataset.
+    Row colours:
+      - light green  → reviewed by 2+ groups, all decisions agree
+      - light red    → reviewed by 2+ groups, at least one conflict
+      - yellow       → reviewed by exactly 1 group
+      - no fill      → not reviewed
     """
-    ws = wb_out.create_sheet(title=group_name)
-
-    # Find maximum number of added labels across any story (for extra columns)
-    max_added = max((len(v) for v in story_added.values()), default=0)
-
-    # ── Copy header row ────────────────────────────────────────────────────────
+    ws = wb_out.create_sheet(title="Overview")
     headers = [cell.value for cell in ws_src[1]]
+
     for col_idx, val in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col_idx, value=val)
         cell.font = Font(bold=True)
         copy_cell_style(ws_src.cell(row=1, column=col_idx), cell)
 
-    # Added-label header columns
-    for i in range(max_added):
-        col_idx = len(headers) + i + 1
-        cell = ws.cell(row=1, column=col_idx, value=f"Added label {i+1}")
-        cell.font = Font(bold=True, color="FFFFFF")
-        cell.fill = FILL_HDR
-
-    # ── Copy data rows ─────────────────────────────────────────────────────────
     for src_row in ws_src.iter_rows(min_row=2):
-        story_id = src_row[0].value
+        story_id = str(src_row[0].value or "")
         if not story_id:
             continue
-
         row_num = src_row[0].row
-        decisions = story_decisions.get(str(story_id), {})
-        was_reviewed = bool(decisions)
+
+        group_decisions = all_story_decisions.get(story_id, {})  # {group_id: {(src,idx): decision}}
+        reviewing_groups = list(group_decisions.keys())
+        n_groups = len(reviewing_groups)
+
+        if n_groups == 0:
+            row_fill = None
+        elif n_groups == 1:
+            row_fill = FILL_YELLOW
+        else:
+            # Check for conflicts across groups on any shared label
+            conflict = False
+            all_keys = set()
+            for gd in group_decisions.values():
+                all_keys |= gd.keys()
+            for key in all_keys:
+                decisions_for_key = {gd[key] for gd in group_decisions.values() if key in gd}
+                if len(decisions_for_key) > 1:
+                    conflict = True
+                    break
+            row_fill = FILL_LT_RED if conflict else FILL_LT_GREEN
 
         for src_cell in src_row:
             dst = ws.cell(row=row_num, column=src_cell.column, value=src_cell.value)
             copy_cell_style(src_cell, dst)
+            if row_fill:
+                dst.fill = row_fill
 
-            col = src_cell.column
-
-            if was_reviewed and col <= 8:
-                # Info columns — yellow to mark row as reviewed
-                dst.fill = FILL_YELLOW
-                continue
-
-            # Label columns (9–18): colour by decision
-            if col >= 9:
-                # Work out which (source, index) this column corresponds to
-                offset = col - 9         # 0-17 within label columns
-                label_index = offset // 2 + 1
-                source = "Human" if offset % 2 == 0 else "AI"
-                decision = decisions.get((source, label_index))
-                if decision == "confirm":
-                    dst.fill = FILL_GREEN
-                elif decision == "reject":
-                    dst.fill = FILL_RED
-                elif was_reviewed:
-                    dst.fill = FILL_YELLOW  # reviewed but abstained / no decision on this cell
-
-        # Write added labels in extra columns
-        added = story_added.get(str(story_id), [])
-        for i, lbl in enumerate(added):
-            col_idx = len(headers) + i + 1
-            text = lbl["label"]
-            if lbl.get("sublabel"):
-                text += f" > {lbl['sublabel']}"
-            if lbl.get("note"):
-                text += f" ({lbl['note']})"
-            cell = ws.cell(row=row_num, column=col_idx, value=text)
-            cell.fill = FILL_GREEN
-
-    # Column widths — approximate
     for col in ws.columns:
         max_len = max((len(str(c.value or "")) for c in col), default=10)
         ws.column_dimensions[col[0].column_letter].width = min(max_len + 2, 50)
 
     return ws
 
+
+# ── Per-group sheet ───────────────────────────────────────────────────────────
+
+def build_group_sheet(ws_src, story_decisions: dict, story_added: dict, group_name: str, wb_out):
+    """One sheet per group with the original colour scheme."""
+    ws = wb_out.create_sheet(title=group_name)
+    headers = [cell.value for cell in ws_src[1]]
+    max_added = max((len(v) for v in story_added.values()), default=0)
+
+    for col_idx, val in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col_idx, value=val)
+        cell.font = Font(bold=True)
+        copy_cell_style(ws_src.cell(row=1, column=col_idx), cell)
+
+    for i in range(max_added):
+        col_idx = len(headers) + i + 1
+        cell = ws.cell(row=1, column=col_idx, value=f"Added label {i+1}")
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = FILL_HDR
+
+    for src_row in ws_src.iter_rows(min_row=2):
+        story_id = str(src_row[0].value or "")
+        if not story_id:
+            continue
+        row_num = src_row[0].row
+        decisions = story_decisions.get(story_id, {})
+        was_reviewed = bool(decisions)
+
+        for src_cell in src_row:
+            dst = ws.cell(row=row_num, column=src_cell.column, value=src_cell.value)
+            copy_cell_style(src_cell, dst)
+            col = src_cell.column
+            info = label_col_info(col)
+
+            if was_reviewed and not info:
+                dst.fill = FILL_YELLOW
+            elif info:
+                decision = decisions.get(info)
+                if decision == "confirm":
+                    dst.fill = FILL_GREEN
+                elif decision == "reject":
+                    dst.fill = FILL_RED
+                elif was_reviewed:
+                    dst.fill = FILL_YELLOW
+
+        added = story_added.get(story_id, [])
+        for i, lbl in enumerate(added):
+            text = lbl["label"]
+            if lbl.get("sublabel"):
+                text += f" > {lbl['sublabel']}"
+            if lbl.get("note"):
+                text += f" ({lbl['note']})"
+            cell = ws.cell(row=row_num, column=len(headers) + i + 1, value=text)
+            cell.fill = FILL_GREEN
+
+    for col in ws.columns:
+        max_len = max((len(str(c.value or "")) for c in col), default=10)
+        ws.column_dimensions[col[0].column_letter].width = min(max_len + 2, 50)
+
+    return ws
+
+
+# ── Statistics & conflicts sheet ──────────────────────────────────────────────
+
+def build_stats_sheet(wb_out, groups, group_stats, conflict_rows):
+    ws = wb_out.create_sheet(title="Statistics & Conflicts")
+
+    def hdr(row, col, val, fill=None):
+        cell = ws.cell(row=row, column=col, value=val)
+        cell.font = FONT_WHITE_BOLD
+        if fill:
+            cell.fill = fill
+        return cell
+
+    # ── Summary block ──────────────────────────────────────────────────────
+    hdr(1, 1, "Group", FILL_STAT_HDR)
+    hdr(1, 2, "Assigned", FILL_STAT_HDR)
+    hdr(1, 3, "Reviewed", FILL_STAT_HDR)
+    hdr(1, 4, "Confirmed", FILL_STAT_HDR)
+    hdr(1, 5, "Rejected", FILL_STAT_HDR)
+    hdr(1, 6, "New labels", FILL_STAT_HDR)
+
+    for r, gs in enumerate(group_stats, start=2):
+        ws.cell(row=r, column=1, value=gs["group"].name)
+        ws.cell(row=r, column=2, value=gs["total_assigned"])
+        ws.cell(row=r, column=3, value=gs["stories_reviewed"])
+        ws.cell(row=r, column=4, value=gs["confirmed"]).fill = FILL_GREEN
+        ws.cell(row=r, column=5, value=gs["rejected"]).fill = FILL_RED
+        ws.cell(row=r, column=6, value=gs["new_labels"])
+
+    conflict_start = len(group_stats) + 4
+
+    # ── Conflicts block ────────────────────────────────────────────────────
+    ws.cell(row=conflict_start - 1, column=1, value="Conflicts — stories with differing group decisions").font = Font(bold=True, size=12)
+
+    col_headers = ["Story ID", "Label"] + [g.name for g in groups]
+    for c, val in enumerate(col_headers, 1):
+        hdr(conflict_start, c, val, FILL_STAT_HDR)
+
+    for r, row in enumerate(conflict_rows, start=conflict_start + 1):
+        ws.cell(row=r, column=1, value=row["story_id"])
+        ws.cell(row=r, column=2, value=row["label"])
+        for c, group in enumerate(groups, start=3):
+            dec = row["decisions"].get(group.name, "—")
+            cell = ws.cell(row=r, column=c, value=dec)
+            if dec == "confirm":
+                cell.fill = FILL_GREEN
+            elif dec == "reject":
+                cell.fill = FILL_RED
+
+    for col in ws.columns:
+        max_len = max((len(str(c.value or "")) for c in col), default=10)
+        ws.column_dimensions[col[0].column_letter].width = min(max_len + 2, 30)
+
+    return ws
+
+
+# ── Main export endpoint ──────────────────────────────────────────────────────
 
 @router.get("/export")
 async def export_all(request: Request, session_id: int | None = None):
@@ -127,25 +232,25 @@ async def export_all(request: Request, session_id: int | None = None):
         return RedirectResponse(url="/login", status_code=302)
 
     async with SessionLocal() as db:
-        if user.is_admin:
-            groups = (await db.execute(select(Group))).scalars().all()
-        else:
-            groups = (await db.execute(
-                select(Group).where(Group.id == user.group_id)
-            )).scalars().all()
+        groups = (await db.execute(select(Group))).scalars().all()
+        if not user.is_admin:
+            groups = [g for g in groups if g.id == user.group_id]
 
-        # Load source workbook
         wb_src = openpyxl.load_workbook(DATASET_PATH)
         ws_src = wb_src.active
-
         wb_out = openpyxl.Workbook()
-        wb_out.remove(wb_out.active)  # remove default empty sheet
+        wb_out.remove(wb_out.active)
+
+        # Collect per-group decision and added-label maps
+        group_story_decisions: dict[int, dict[str, dict]] = {}   # group_id → story_id → {(src,idx): decision}
+        group_story_added:     dict[int, dict[str, list]] = {}   # group_id → story_id → [entries]
+        group_stats_list = []
 
         for group in groups:
-            # ── Decisions for this group (optionally filtered by session) ─────
             dec_where = [User.group_id == group.id]
             if session_id:
                 dec_where.append(LabelDecision.session_id == session_id)
+
             dec_result = await db.execute(
                 select(LabelDecision, StoryLabel, UserStory)
                 .join(StoryLabel, StoryLabel.id == LabelDecision.story_label_id)
@@ -153,7 +258,7 @@ async def export_all(request: Request, session_id: int | None = None):
                 .join(User, User.id == LabelDecision.user_id)
                 .where(*dec_where)
             )
-            # Aggregate: if any group member rejected → reject; if all confirmed → confirm
+
             raw: dict[str, dict[tuple, list[str]]] = {}
             for dec, lbl, story in dec_result.all():
                 key = (lbl.source, lbl.label_index)
@@ -170,10 +275,10 @@ async def export_all(request: Request, session_id: int | None = None):
                     else:
                         story_decisions[sid][key] = "abstain"
 
-            # ── Added labels for this group ───────────────────────────────────
             added_where = [User.group_id == group.id]
             if session_id:
                 added_where.append(AddedLabel.session_id == session_id)
+
             added_result = await db.execute(
                 select(AddedLabel, UserStory)
                 .join(UserStory, UserStory.id == AddedLabel.story_id)
@@ -185,24 +290,121 @@ async def export_all(request: Request, session_id: int | None = None):
             story_added: dict[str, list] = {}
             for added, story in added_result.all():
                 entry = {
-                    "label": added.taxonomy_label.label if added.taxonomy_label else (added.free_text or ""),
+                    "label":    added.taxonomy_label.label    if added.taxonomy_label else (added.free_text or ""),
                     "sublabel": added.taxonomy_label.sublabel if added.taxonomy_label else "",
-                    "note": added.note or "",
+                    "note":     added.note or "",
                 }
                 story_added.setdefault(story.story_id, []).append(entry)
 
-            await build_sheet(ws_src, story_decisions, story_added, group.name, wb_out)
+            group_story_decisions[group.id] = story_decisions
+            group_story_added[group.id]     = story_added
 
-    # Save to buffer
+            # Collect stats
+            from sqlalchemy import func, and_
+            from app.models import GroupAssignment
+            total_assigned = (await db.execute(
+                select(func.count(GroupAssignment.id)).where(GroupAssignment.group_id == group.id)
+            )).scalar()
+            group_stats_list.append({
+                "group": group,
+                "total_assigned": total_assigned,
+                "stories_reviewed": len(story_decisions),
+                "confirmed": sum(1 for sd in story_decisions.values() for d in sd.values() if d == "confirm"),
+                "rejected":  sum(1 for sd in story_decisions.values() for d in sd.values() if d == "reject"),
+                "new_labels": sum(len(v) for v in story_added.values()),
+            })
+
+        # Build combined story decisions {story_id: {group_id: {key: decision}}}
+        all_story_decisions: dict[str, dict] = {}
+        for group in groups:
+            for story_id, sd in group_story_decisions[group.id].items():
+                all_story_decisions.setdefault(story_id, {})[group.id] = sd
+
+        # Build conflict rows for stats sheet
+        conflict_rows = []
+        for story_id, gd in all_story_decisions.items():
+            if len(gd) < 2:
+                continue
+            all_keys = set()
+            for d in gd.values():
+                all_keys |= d.keys()
+            for key in all_keys:
+                group_decisions = {g.name: gd[g.id][key] for g in groups if g.id in gd and key in gd[g.id]}
+                unique_decisions = set(group_decisions.values())
+                if len(unique_decisions) > 1:
+                    label_text = f"{key[0]} label {key[1]}"
+                    conflict_rows.append({
+                        "story_id": story_id,
+                        "label": label_text,
+                        "decisions": group_decisions,
+                    })
+        conflict_rows.sort(key=lambda r: r["story_id"])
+
+        # Sheet 1: Overview
+        build_overview_sheet(ws_src, all_story_decisions, {}, wb_out)
+
+        # Per-group sheets
+        for group in groups:
+            build_group_sheet(
+                ws_src,
+                group_story_decisions[group.id],
+                group_story_added[group.id],
+                group.name,
+                wb_out,
+            )
+
+        # Final: Statistics & Conflicts
+        build_stats_sheet(wb_out, groups, group_stats_list, conflict_rows)
+
     buf = io.BytesIO()
     wb_out.save(buf)
     buf.seek(0)
-
-    scope = "all_groups" if user.is_admin else f"{groups[0].name.replace(' ', '_')}"
-    filename = f"label_validation_{scope}.xlsx"
-
+    filename = "label_validation_results.xlsx"
     return StreamingResponse(
         buf,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+# ── Revised labelbook export ──────────────────────────────────────────────────
+
+@router.get("/export/labelbook")
+async def export_labelbook(request: Request):
+    user = await get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+
+    async with SessionLocal() as db:
+        new_labels = (await db.execute(
+            select(TaxonomyLabel)
+            .where(TaxonomyLabel.is_user_created == True)
+            .order_by(TaxonomyLabel.label, TaxonomyLabel.sublabel)
+        )).scalars().all()
+
+    wb = openpyxl.load_workbook(LABELBOOK_PATH)
+    ws = wb.active
+
+    if new_labels:
+        # Find the last used row and append new labels with a green section
+        last_row = ws.max_row + 2
+        header_cell = ws.cell(row=last_row, column=3, value="NEW LABELS (added during sessions)")
+        header_cell.font = FONT_WHITE_BOLD
+        header_cell.fill = FILL_HDR_NEW
+        ws.merge_cells(start_row=last_row, start_column=3, end_row=last_row, end_column=6)
+
+        for i, t in enumerate(new_labels, start=1):
+            r = last_row + i
+            ws.cell(row=r, column=3, value=t.label).fill  = FILL_GREEN
+            ws.cell(row=r, column=4, value=t.sublabel).fill = FILL_GREEN
+            ws.cell(row=r, column=5, value=t.source or "").fill = FILL_GREEN
+            ws.cell(row=r, column=6, value=t.description or "").fill = FILL_GREEN
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=labelbook_revised.xlsx"},
     )

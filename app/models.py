@@ -14,7 +14,6 @@ class Group(Base):
 
     users: Mapped[list["User"]] = relationship(back_populates="group")
     assignments: Mapped[list["GroupAssignment"]] = relationship(back_populates="group")
-    sessions: Mapped[list["Session"]] = relationship(back_populates="group")
 
 
 class User(Base):
@@ -74,6 +73,7 @@ class TaxonomyLabel(Base):
     sublabel: Mapped[str | None] = mapped_column(Text)
     source: Mapped[str | None] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(Text)
+    is_user_created: Mapped[bool] = mapped_column(Boolean, default=False)
 
     added_labels: Mapped[list["AddedLabel"]] = relationship(back_populates="taxonomy_label")
 
@@ -86,22 +86,22 @@ class GroupAssignment(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     group_id: Mapped[int] = mapped_column(ForeignKey("groups.id"))
     story_id: Mapped[int] = mapped_column(ForeignKey("user_stories.id"))
-    position: Mapped[int] = mapped_column(Integer)  # order within the group's subset
+    position: Mapped[int] = mapped_column(Integer)
 
     group: Mapped["Group"] = relationship(back_populates="assignments")
     story: Mapped["UserStory"] = relationship(back_populates="assignments")
 
 
 class Session(Base):
-    """A review session for a group."""
+    """A global review session started and stopped by an admin."""
     __tablename__ = "sessions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    group_id: Mapped[int] = mapped_column(ForeignKey("groups.id"))
+    started_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime)
 
-    group: Mapped["Group"] = relationship(back_populates="sessions")
+    started_by_user: Mapped["User | None"] = relationship(foreign_keys=[started_by])
     decisions: Mapped[list["LabelDecision"]] = relationship(back_populates="session")
     added_labels: Mapped[list["AddedLabel"]] = relationship(back_populates="session")
 
@@ -134,7 +134,7 @@ class AddedLabel(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     story_id: Mapped[int] = mapped_column(ForeignKey("user_stories.id"))
     taxonomy_label_id: Mapped[int | None] = mapped_column(ForeignKey("taxonomy_labels.id"))
-    free_text: Mapped[str | None] = mapped_column(Text)  # if not from taxonomy
+    free_text: Mapped[str | None] = mapped_column(Text)
     note: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

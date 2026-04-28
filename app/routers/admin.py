@@ -1,10 +1,17 @@
+from datetime import datetime
+
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select, func
+from sqlalchemy.orm import selectinload
+
 from app.auth import get_current_user
 from app.database import SessionLocal
-from app.models import Group, GroupAssignment, LabelDecision, StoryLabel, User, UserStory
+from app.models import (
+    Group, GroupAssignment, LabelDecision,
+    Session as ReviewSession, User, UserStory
+)
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
@@ -17,6 +24,15 @@ async def require_admin(request: Request):
     return user
 
 
+async def get_active_session(db) -> ReviewSession | None:
+    result = await db.execute(
+        select(ReviewSession)
+        .where(ReviewSession.ended_at.is_(None))
+        .order_by(ReviewSession.started_at.desc())
+    )
+    return result.scalar_one_or_none()
+
+
 @router.get("/admin", response_class=HTMLResponse)
 async def admin(request: Request):
     user = await require_admin(request)
@@ -26,6 +42,7 @@ async def admin(request: Request):
     async with SessionLocal() as db:
         users = (await db.execute(select(User).order_by(User.email))).scalars().all()
         groups = (await db.execute(select(Group))).scalars().all()
+        active_session = await get_active_session(db)
 
         # Progress per group
         progress = {}
@@ -44,7 +61,7 @@ async def admin(request: Request):
                 "decided": decided_q.scalar(),
             }
 
-        # Cross-group comparison: stories reviewed by 2+ groups
+        # Cross-group comparison
         overlap_result = await db.execute(
             select(
                 UserStory.id,
@@ -60,7 +77,6 @@ async def admin(request: Request):
         )
         overlapping_stories = overlap_result.all()
 
-        # For each overlapping story, get per-group confirm/reject rates
         comparison = []
         for row in overlapping_stories:
             story_detail = []
@@ -97,7 +113,38 @@ async def admin(request: Request):
         "groups": groups,
         "progress": progress,
         "comparison": comparison,
+        "active_session": active_session,
     })
+
+
+@router.post("/session/start")
+async def start_session(request: Request):
+    user = await require_admin(request)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+
+    async with SessionLocal() as db:
+        existing = await get_active_session(db)
+        if not existing:
+            db.add(ReviewSession(started_by=user.id))
+            await db.commit()
+
+    return RedirectResponse(url="/admin", status_code=302)
+
+
+@router.post("/session/end")
+async def end_session(request: Request):
+    user = await require_admin(request)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+
+    async with SessionLocal() as db:
+        session = await get_active_session(db)
+        if session:
+            session.ended_at = datetime.utcnow()
+            await db.commit()
+
+    return RedirectResponse(url="/admin", status_code=302)
 
 
 @router.post("/admin/assign-group")
