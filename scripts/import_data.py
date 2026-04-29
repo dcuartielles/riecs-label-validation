@@ -7,6 +7,7 @@ Usage:
     python -m scripts.import_data --reset
 """
 import asyncio
+import re
 import sys
 import random
 from pathlib import Path
@@ -21,7 +22,7 @@ from app.models import (
     Group, UserStory, StoryLabel, TaxonomyLabel, GroupAssignment
 )
 
-DATASET_PATH = Path("input_data/unified_outcomes_v004_labelled_v002_UItest_v001.xlsx")
+DATASET_PATH = Path("input_data/combined_output_VALIDATION_READY_EXPANDED_AI_LABELS_v007.xlsx")
 LABELBOOK_PATH = Path("labelbook/Revised labelbook proposal for Oulu.xlsx")
 
 GROUP_NAMES = ["Group A", "Group B", "Group C"]
@@ -35,52 +36,86 @@ def parse_stories(path: Path) -> list[dict]:
     ws = wb.active
     headers = [cell.value for cell in ws[1]]
 
+    def col(name: str) -> int:
+        for i, h in enumerate(headers):
+            if h and h.strip() == name:
+                return i
+        raise KeyError(f"Column not found: {name!r}")
+
+    idx_story_id     = col("User Story ID")
+    idx_workshop     = col("Workshop / Engagement Session")
+    idx_submitted_by = col("Who submitted it")
+    idx_stakeholder  = col("Stakeholder Group")
+    idx_user_type    = col("User type")
+    idx_task         = col("Task")
+    idx_goal         = col("Goal")
+    idx_notes        = col("Additional Notes (optional)")
+
+    # Collect human label columns: (label_col, status_col, label_num)
+    human_pairs: list[tuple[int, int | None, int]] = []
+    ai_cols: list[tuple[int, int]] = []
+    for i, h in enumerate(headers):
+        if not h:
+            continue
+        m = re.match(r'^Human label (\d+)$', h.strip(), re.IGNORECASE)
+        if m:
+            num = int(m.group(1))
+            status_name = f"Human label {num} Status"
+            status_idx = next((j for j, sh in enumerate(headers)
+                               if sh and sh.strip() == status_name), None)
+            human_pairs.append((i, status_idx, num))
+            continue
+        m2 = re.match(r'^AI label (\d+)$', h.strip(), re.IGNORECASE)
+        if m2:
+            ai_cols.append((i, int(m2.group(1))))
+
     seen_ids = set()
     stories = []
 
     for row in ws.iter_rows(min_row=2, values_only=True):
-        story_id = row[0]
+        story_id = row[idx_story_id]
         if not story_id or story_id in seen_ids:
             continue
         seen_ids.add(story_id)
 
-        label_cols = {}
-        for i, header in enumerate(headers):
-            if header and ("label" in header.lower()) and row[i]:
-                label_cols[header] = row[i]
-
         raw_labels = []
-        for header, value in label_cols.items():
-            h = header.lower()
-            if "human" in h:
-                source = "Human"
-            elif "ai" in h:
-                source = "AI"
-            else:
+        for label_idx, status_idx, num in human_pairs:
+            val = row[label_idx]
+            if not val:
                 continue
-
-            # extract index from header, e.g. "Human label 3" → 3
-            parts = header.split()
-            try:
-                idx = int(parts[-1])
-            except ValueError:
-                idx = 1
-
-            # semicolons separate multiple labels in one cell
-            for text_val in str(value).split(";"):
+            status = row[status_idx] if status_idx is not None else None
+            for text_val in str(val).split(";"):
                 text_val = text_val.strip()
                 if text_val:
-                    raw_labels.append({"source": source, "label_text": text_val, "label_index": idx})
+                    raw_labels.append({
+                        "source": "Human",
+                        "label_text": text_val,
+                        "label_index": num,
+                        "label_status": status,
+                    })
+        for label_idx, num in ai_cols:
+            val = row[label_idx]
+            if not val:
+                continue
+            for text_val in str(val).split(";"):
+                text_val = text_val.strip()
+                if text_val:
+                    raw_labels.append({
+                        "source": "AI",
+                        "label_text": text_val,
+                        "label_index": num,
+                        "label_status": None,
+                    })
 
         stories.append({
             "story_id": story_id,
-            "workshop": row[1],
-            "submitted_by": row[2],
-            "stakeholder_group": row[3],
-            "user_type": row[4],
-            "task": row[5],
-            "goal": row[6],
-            "additional_notes": row[7],
+            "workshop": row[idx_workshop],
+            "submitted_by": row[idx_submitted_by],
+            "stakeholder_group": row[idx_stakeholder],
+            "user_type": row[idx_user_type],
+            "task": row[idx_task],
+            "goal": row[idx_goal],
+            "additional_notes": row[idx_notes],
             "labels": raw_labels,
         })
 
@@ -177,6 +212,7 @@ async def run(reset: bool = False):
                         source=lbl["source"],
                         label_text=lbl["label_text"],
                         label_index=lbl["label_index"],
+                        label_status=lbl["label_status"],
                     ))
             await db.commit()
             print(f"Imported {len(stories)} user stories.")

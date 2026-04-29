@@ -59,6 +59,7 @@ class StoryLabel(Base):
     source: Mapped[str] = mapped_column(String(10))   # 'AI' or 'Human'
     label_text: Mapped[str] = mapped_column(Text, nullable=False)
     label_index: Mapped[int] = mapped_column(Integer)  # 1-5
+    label_status: Mapped[str | None] = mapped_column(String(20))  # Human labels only
 
     story: Mapped["UserStory"] = relationship(back_populates="labels")
     decisions: Mapped[list["LabelDecision"]] = relationship(back_populates="story_label")

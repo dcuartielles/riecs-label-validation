@@ -108,6 +108,19 @@ main { max-width: 860px; margin: 0 auto; padding: 2rem 1rem; }
   width: 100%;
 }
 
+.btn-decision {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: 1rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
 .btn-confirm { background: #d4ead5; color: #1a5c2a; border-color: var(--sage); }
 .btn-confirm.active { background: var(--sage); color: var(--white); border-color: #6b9470; }
 
@@ -244,6 +257,46 @@ main { max-width: 860px; margin: 0 auto; padding: 2rem 1rem; }
   box-shadow: 0 2px 10px rgba(0,0,0,0.25);
 }
 .label-text.has-tooltip:hover::after { opacity: 1; }
+
+/* ── Human label status pill ── */
+.status-pill {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 99px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+  cursor: help;
+  position: relative;
+}
+.status-pill[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  background: var(--navy);
+  color: var(--white);
+  padding: 0.45rem 0.65rem;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  white-space: normal;
+  width: 260px;
+  z-index: 200;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.25);
+}
+.status-pill[data-tooltip]:hover::after { opacity: 1; }
+
+.status-non-canonical  { background: #FFC7CE; color: #9C0006; }
+.status-fragmented     { background: #FFEB9C; color: #7D6608; }
+.status-near-miss      { background: #C6EFCE; color: #276221; }
+.status-exact-match    { background: #FFFFFF; color: #3C3C3C; border: 1px solid #ccc; }
+.status-no-human-labels { background: #F2F2F2; color: #767676; }
+
 
 .source-badge {
   font-size: 0.7rem;

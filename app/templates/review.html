@@ -42,6 +42,12 @@
 
   <!-- Existing labels -->
   <div class="labels-section">
+    {% set status_tooltips = {
+      "Non-canonical": "Label(s) come from a different taxonomy; no direct equivalent exists in the labelbook.",
+      "Fragmented":    "Label cell appears split or corrupted (e.g. a multi-label string broken across columns).",
+      "Near-miss":     "Label is recognisably close to a labelbook entry and can be mapped with confidence.",
+      "Exact match":   "All human labels are found verbatim in the labelbook."
+    } %}
     <h2>Existing labels — confirm or reject each one</h2>
 
     {% if labels %}
@@ -50,6 +56,11 @@
         <div class="label-row {% if decisions.get(lbl.id) %}decided-{{ decisions[lbl.id] }}{% endif %}">
           <div class="label-info">
             <span class="source-badge source-{{ lbl.source | lower }}">{{ lbl.source }}</span>
+            {% if lbl.source == 'Human' and lbl.label_status %}
+              {% set sc = lbl.label_status | lower | replace(" ", "-") %}
+              <span class="status-pill status-{{ sc }}"
+                    data-tooltip="{{ status_tooltips.get(lbl.label_status, '') }}">{{ lbl.label_status }}</span>
+            {% endif %}
             {% set desc = label_descriptions.get(lbl.id) %}
             <span class="label-text{% if desc %} has-tooltip{% endif %}"
                   {% if desc %}data-tooltip="{{ desc }}"{% endif %}>{{ lbl.label_text }}</span>
@@ -59,18 +70,12 @@
               <input type="hidden" name="story_id" value="{{ story.id }}">
               <input type="hidden" name="story_label_id" value="{{ lbl.id }}">
               <input type="hidden" name="pos" value="{{ pos }}">
-              <button type="submit" name="decision" value="confirm"
-                class="btn btn-confirm {% if decisions.get(lbl.id) == 'confirm' %}active{% endif %}">
-                Confirm
-              </button>
-              <button type="submit" name="decision" value="reject"
-                class="btn btn-reject {% if decisions.get(lbl.id) == 'reject' %}active{% endif %}">
-                Reject
-              </button>
-              <button type="submit" name="decision" value="abstain"
-                class="btn btn-abstain {% if decisions.get(lbl.id) == 'abstain' %}active{% endif %}">
-                Abstain
-              </button>
+              <button type="submit" name="decision" value="confirm" title="Confirm"
+                class="btn btn-decision btn-confirm {% if decisions.get(lbl.id) == 'confirm' %}active{% endif %}">&#10003;</button>
+              <button type="submit" name="decision" value="reject" title="Reject"
+                class="btn btn-decision btn-reject {% if decisions.get(lbl.id) == 'reject' %}active{% endif %}">&#10007;</button>
+              <button type="submit" name="decision" value="abstain" title="Abstain"
+                class="btn btn-decision btn-abstain {% if decisions.get(lbl.id) == 'abstain' %}active{% endif %}">&#9711;</button>
             </form>
           </div>
         </div>
