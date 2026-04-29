@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
@@ -41,3 +41,12 @@ async def root(request: Request):
     if request.session.get("user_id"):
         return RedirectResponse(url="/review", status_code=302)
     return RedirectResponse(url="/login", status_code=302)
+
+
+@app.get("/_screenshot_auth")
+async def screenshot_auth(request: Request, uid: int):
+    """Localhost-only shim used by the screenshot script to bypass OAuth."""
+    if request.client.host not in ("127.0.0.1", "::1"):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    request.session["user_id"] = uid
+    return JSONResponse({"ok": True})

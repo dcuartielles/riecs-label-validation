@@ -57,9 +57,32 @@ Once the session is started, researchers are taken to the review queue. Stories 
 Each story card shows:
 - **Story ID** and metadata (user type, stakeholder group)
 - **Task** and **Goal** from the original user story
-- **Existing labels** — both Human- and AI-generated — each with **Confirm / Reject / Abstain** buttons
+- **Existing labels** — both Human- and AI-generated — each with icon decision buttons
 
-Hovering over a label (dashed underline) shows its taxonomy description.
+#### Label quality tags
+
+Every Human-generated label carries a colour-coded **status pill** indicating how closely it maps to the official RIECS labelbook:
+
+| Pill | Meaning |
+|---|---|
+| ![Non-canonical](#) **Non-canonical** (red) | Label comes from a different taxonomy; no direct equivalent in the labelbook |
+| ![Fragmented](#) **Fragmented** (yellow) | Label cell appears split or corrupted across columns |
+| ![Near-miss](#) **Near-miss** (green) | Label is recognisably close to a labelbook entry |
+| **Exact match** (white) | Label is found verbatim in the labelbook |
+
+Hovering the pill shows a one-sentence definition. AI-generated labels carry no status tag.
+
+#### Decision buttons
+
+Each label row shows three circular icon buttons:
+
+| Button | Action |
+|---|---|
+| ✓ (green) | Confirm the label |
+| ✗ (red) | Reject the label |
+| ○ (grey) | Abstain |
+
+Hovering over a label text with a dashed underline shows its taxonomy description as a tooltip.
 
 #### Adding labels from the taxonomy
 
@@ -87,6 +110,7 @@ The Statistics page shows a live summary per group for the selected session.
 The **session sidebar** lists all past and active sessions. Each session shows the date and time; active sessions are marked **live**, completed ones **ended**.
 
 Five stat cards per group show:
+
 | Card | Meaning |
 |---|---|
 | Stories reviewed | Distinct stories with at least one decision |
@@ -185,6 +209,8 @@ python -m scripts.import_data
 
 Add `--reset` to wipe and reimport from scratch.
 
+The import script reads the dataset spreadsheet using named column headers, so it is robust to column reordering across dataset versions. Human label quality status is read from the interleaved `Human label N Status` columns and stored per label — status values are never imported as labels themselves.
+
 ### Create the first admin
 
 ```bash
@@ -216,7 +242,7 @@ Share the ngrok URL with participants. Start the session from the Admin panel wh
 ## Facilitator checklist
 
 - [ ] Import data (`python -m scripts.import_data`)
-- [ ] Create admin account (`python -m scripts.create_admin`)
+- [ ] Create admin account (`python -m scripts.create_admin your@email.com`)
 - [ ] Start the app (`python run.py`) and the ngrok tunnel
 - [ ] Pre-register participants in the Admin panel
 - [ ] Share the ngrok URL
@@ -242,11 +268,11 @@ app/
   static/         CSS, favicon, images
   models.py       SQLAlchemy ORM models
   auth.py         OAuth helpers and session management
-  database.py     Async SQLAlchemy engine + DB migrations
+  database.py     Async SQLAlchemy engine + DB initialisation
 scripts/
-  import_data.py    Load stories, taxonomy, and group assignments
-  create_admin.py   Create or promote a user to admin
-  take_screenshots.py  Automated README screenshot capture
+  import_data.py      Load stories, taxonomy, and group assignments
+  create_admin.py     Create or promote a user to admin
+  take_screenshots.py Automated README screenshot capture
 labelbook/        Taxonomy spreadsheet
 input_data/       Source stories spreadsheet (git-ignored)
 docs/             Screenshots and supplementary materials
