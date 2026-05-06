@@ -195,7 +195,15 @@
     <!-- Row 2: new label name + EuroVoc check -->
     <div style="display:flex;gap:0.6rem;margin-bottom:0.6rem;flex-wrap:wrap;align-items:center">
       <input id="new-sublabel" type="text" placeholder="New label name"
-             class="note-input" style="flex:1" oninput="onSublabelInput()">
+             class="note-input" style="flex:1" oninput="onSublabelInput()"
+             list="sublabel-datalist" autocomplete="off">
+      <datalist id="sublabel-datalist">
+        {% for top_label, sublabels in tax_tree.items() %}
+          {% for t in sublabels %}
+            <option value="{{ t.sublabel }}">
+          {% endfor %}
+        {% endfor %}
+      </datalist>
       <button type="button" class="btn btn-nav" onclick="checkSublabel()">Check EU terms</button>
     </div>
 
@@ -346,10 +354,11 @@ function prepareCreate() {
   return true;
 }
 
-// Taxonomy select — show description on change (existing behaviour)
+// ── Taxonomy data (module-scoped so the poll can update it) ──────────────────
+let taxData = JSON.parse(document.getElementById("tax-data").textContent);
+
 document.addEventListener("DOMContentLoaded", function () {
   const sel = document.getElementById("taxonomy-select");
-  const taxData = JSON.parse(document.getElementById("tax-data").textContent);
   const descBox = document.getElementById("label-description");
   if (sel) {
     sel.addEventListener("change", function () {
@@ -363,5 +372,71 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 });
+
+// ── Live taxonomy refresh (every 60 s) ───────────────────────────────────────
+async function refreshTaxonomy() {
+  let data;
+  try {
+    const resp = await fetch("/api/taxonomy");
+    if (!resp.ok) return;
+    data = await resp.json();
+  } catch (_) { return; }
+
+  // Update flat lookup used by description tooltip
+  taxData = data.flat;
+
+  // Rebuild "Add label" dropdown
+  const sel = document.getElementById("taxonomy-select");
+  if (sel) {
+    const saved = sel.value;
+    sel.innerHTML = '<option value="">— select a label —</option>';
+    for (const [cat, subs] of Object.entries(data.tree)) {
+      if (!subs.length) continue;
+      const og = document.createElement("optgroup");
+      og.label = cat;
+      for (const sub of subs) {
+        const opt = document.createElement("option");
+        opt.value = sub.id;
+        opt.textContent = sub.sublabel;
+        og.appendChild(opt);
+      }
+      sel.appendChild(og);
+    }
+    sel.value = saved;
+  }
+
+  // Rebuild "Create" category dropdown (keep placeholder + __other__ entries)
+  const catSel = document.getElementById("category-select");
+  if (catSel) {
+    const savedCat = catSel.value;
+    const placeholder = catSel.options[0];
+    const otherOpt   = catSel.options[catSel.options.length - 1];
+    catSel.innerHTML = "";
+    catSel.appendChild(placeholder);
+    for (const cat of data.categories) {
+      const opt = document.createElement("option");
+      opt.value = cat;
+      opt.textContent = cat;
+      catSel.appendChild(opt);
+    }
+    catSel.appendChild(otherOpt);
+    catSel.value = savedCat;
+  }
+
+  // Rebuild datalist for new-sublabel autofill
+  const dl = document.getElementById("sublabel-datalist");
+  if (dl) {
+    dl.innerHTML = "";
+    for (const subs of Object.values(data.tree)) {
+      for (const sub of subs) {
+        const opt = document.createElement("option");
+        opt.value = sub.sublabel;
+        dl.appendChild(opt);
+      }
+    }
+  }
+}
+
+setInterval(refreshTaxonomy, 60000);
 </script>
 {% endblock %}

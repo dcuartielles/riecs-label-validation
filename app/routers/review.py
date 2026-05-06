@@ -277,6 +277,38 @@ async def create_taxonomy_label(
     return RedirectResponse(url=f"/review?pos={pos}", status_code=302)
 
 
+@router.get("/api/taxonomy")
+async def taxonomy_list(request: Request):
+    """Return current taxonomy as JSON for client-side refresh."""
+    user = await get_current_user(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+    async with SessionLocal() as db:
+        all_tax = (await db.execute(
+            select(TaxonomyLabel).order_by(TaxonomyLabel.label, TaxonomyLabel.sublabel)
+        )).scalars().all()
+
+    tree: dict[str, list] = {}
+    flat: dict[str, dict] = {}
+    for t in all_tax:
+        tree.setdefault(t.label, [])
+        if t.sublabel:
+            tree[t.label].append({
+                "id": t.id,
+                "sublabel": t.sublabel,
+                "description": t.description or "",
+            })
+            flat[str(t.id)] = {
+                "label": t.label,
+                "sublabel": t.sublabel,
+                "description": t.description or "",
+            }
+
+    categories = [cat for cat, subs in tree.items() if subs]
+    return JSONResponse({"flat": flat, "tree": tree, "categories": categories})
+
+
 @router.get("/api/eurovoc")
 async def eurovoc_lookup(request: Request, term: str = ""):
     """Query EuroVoc via EU Publications SPARQL endpoint."""
