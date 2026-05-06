@@ -17,7 +17,7 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-APP_VERSION = "v004"
+APP_VERSION = "v005"
 
 
 def find_latest_dataset() -> Path:
