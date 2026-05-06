@@ -70,10 +70,17 @@ def build_overview_sheet(ws_src, all_story_decisions: dict, story_added: dict, w
     headers = [cell.value for cell in ws_src[1]]
     label_col_map = build_label_col_map(headers)
 
+    max_added = max((len(v) for v in story_added.values()), default=0)
+
     for col_idx, val in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col_idx, value=val)
         cell.font = Font(bold=True)
         copy_cell_style(ws_src.cell(row=1, column=col_idx), cell)
+
+    for i in range(max_added):
+        cell = ws.cell(row=1, column=len(headers) + i + 1, value=f"Added label {i+1}")
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = FILL_HDR
 
     for src_row in ws_src.iter_rows(min_row=2):
         story_id = str(src_row[0].value or "")
@@ -81,16 +88,14 @@ def build_overview_sheet(ws_src, all_story_decisions: dict, story_added: dict, w
             continue
         row_num = src_row[0].row
 
-        group_decisions = all_story_decisions.get(story_id, {})  # {group_id: {(src,idx): decision}}
-        reviewing_groups = list(group_decisions.keys())
-        n_groups = len(reviewing_groups)
+        group_decisions = all_story_decisions.get(story_id, {})
+        n_groups = len(group_decisions)
 
         if n_groups == 0:
             row_fill = None
         elif n_groups == 1:
             row_fill = FILL_YELLOW
         else:
-            # Check for conflicts across groups on any shared label
             conflict = False
             all_keys = set()
             for gd in group_decisions.values():
@@ -107,6 +112,15 @@ def build_overview_sheet(ws_src, all_story_decisions: dict, story_added: dict, w
             copy_cell_style(src_cell, dst)
             if row_fill:
                 dst.fill = row_fill
+
+        for i, lbl in enumerate(story_added.get(story_id, [])):
+            text = lbl["label"]
+            if lbl.get("sublabel"):
+                text += f" > {lbl['sublabel']}"
+            if lbl.get("note"):
+                text += f" ({lbl['note']})"
+            cell = ws.cell(row=row_num, column=len(headers) + i + 1, value=text)
+            cell.fill = FILL_GREEN
 
     for col in ws.columns:
         max_len = max((len(str(c.value or "")) for c in col), default=10)
@@ -328,6 +342,17 @@ async def export_all(request: Request, session_id: int | None = None):
             for story_id, sd in group_story_decisions[group.id].items():
                 all_story_decisions.setdefault(story_id, {})[group.id] = sd
 
+        # Merge added labels across all groups (deduplicate by label text)
+        all_story_added: dict[str, list] = {}
+        for gid, sadded in group_story_added.items():
+            for story_id, entries in sadded.items():
+                seen = {e["label"] + (e.get("sublabel") or "") for e in all_story_added.get(story_id, [])}
+                for entry in entries:
+                    key = entry["label"] + (entry.get("sublabel") or "")
+                    if key not in seen:
+                        all_story_added.setdefault(story_id, []).append(entry)
+                        seen.add(key)
+
         # Build conflict rows for stats sheet
         conflict_rows = []
         for story_id, gd in all_story_decisions.items():
@@ -349,7 +374,7 @@ async def export_all(request: Request, session_id: int | None = None):
         conflict_rows.sort(key=lambda r: r["story_id"])
 
         # Sheet 1: Overview
-        build_overview_sheet(ws_src, all_story_decisions, {}, wb_out)
+        build_overview_sheet(ws_src, all_story_decisions, all_story_added, wb_out)
 
         # Per-group sheets
         for group in groups:

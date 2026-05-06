@@ -173,11 +173,14 @@ async def run(reset: bool = False):
 
     async with SessionLocal() as db:
         if reset:
-            for table in [GroupAssignment, StoryLabel, UserStory,
-                          TaxonomyLabel, Group]:
+            for table in [GroupAssignment, StoryLabel, UserStory, Group]:
                 await db.execute(delete(table))
+            # Preserve user-created taxonomy labels; only remove imported ones
+            await db.execute(
+                delete(TaxonomyLabel).where(TaxonomyLabel.is_user_created == False)
+            )
             await db.commit()
-            print("Database cleared.")
+            print("Database cleared (user-created taxonomy labels preserved).")
 
         # --- Groups ---
         existing_groups = (await db.execute(select(Group))).scalars().all()
