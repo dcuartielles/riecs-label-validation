@@ -78,9 +78,9 @@ Each label row shows three circular icon buttons:
 
 | Button | Action |
 |---|---|
-| ✓ (green) | Confirm the label |
-| ✗ (red) | Reject the label |
-| ○ (grey) | Abstain |
+| ![Confirm](docs/badges/btn-confirm.svg) | Confirm the label |
+| ![Reject](docs/badges/btn-reject.svg) | Reject the label |
+| ![Abstain](docs/badges/btn-abstain.svg) | Abstain |
 
 Hovering over a label text with a dashed underline shows its taxonomy description as a tooltip.
 
