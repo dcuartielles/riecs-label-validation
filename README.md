@@ -65,10 +65,10 @@ Every Human-generated label carries a colour-coded **status pill** indicating ho
 
 | Pill | Meaning |
 |---|---|
-| ![Non-canonical](#) **Non-canonical** (red) | Label comes from a different taxonomy; no direct equivalent in the labelbook |
-| ![Fragmented](#) **Fragmented** (yellow) | Label cell appears split or corrupted across columns |
-| ![Near-miss](#) **Near-miss** (green) | Label is recognisably close to a labelbook entry |
-| **Exact match** (white) | Label is found verbatim in the labelbook |
+| ![Non-canonical](docs/badges/non-canonical.svg) | Label comes from a different taxonomy; no direct equivalent in the labelbook |
+| ![Fragmented](docs/badges/fragmented.svg) | Label cell appears split or corrupted across columns |
+| ![Near-miss](docs/badges/near-miss.svg) | Label is recognisably close to a labelbook entry |
+| ![Exact match](docs/badges/exact-match.svg) | Label is found verbatim in the labelbook |
 
 Hovering the pill shows a one-sentence definition. AI-generated labels carry no status tag.
 
