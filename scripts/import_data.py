@@ -5,6 +5,13 @@ Run once (or re-run with --reset to clear and reimport).
 Usage:
     python -m scripts.import_data
     python -m scripts.import_data --reset
+    python -m scripts.import_data --reset --reset-labels
+
+Flags:
+    --reset          Wipe stories, groups, and decisions; keep user-created labels.
+    --reset-labels   Also wipe all taxonomy labels (including user-created ones).
+                     Use this when replacing the labelbook entirely.
+                     Only meaningful together with --reset.
 """
 import asyncio
 import re
@@ -168,19 +175,21 @@ def assign_subsets(story_ids: list[int], group_count: int,
     return assignments
 
 
-async def run(reset: bool = False):
+async def run(reset: bool = False, reset_labels: bool = False):
     await init_db()
 
     async with SessionLocal() as db:
         if reset:
             for table in [GroupAssignment, StoryLabel, UserStory, Group]:
                 await db.execute(delete(table))
-            # Preserve user-created taxonomy labels; only remove imported ones
-            await db.execute(
-                delete(TaxonomyLabel).where(TaxonomyLabel.is_user_created == False)
-            )
-            await db.commit()
-            print("Database cleared (user-created taxonomy labels preserved).")
+            if reset_labels:
+                await db.execute(delete(TaxonomyLabel))
+                print("Database cleared (all taxonomy labels removed).")
+            else:
+                await db.execute(
+                    delete(TaxonomyLabel).where(TaxonomyLabel.is_user_created == False)
+                )
+                print("Database cleared (user-created taxonomy labels preserved).")
 
         # --- Groups ---
         existing_groups = (await db.execute(select(Group))).scalars().all()
@@ -258,4 +267,5 @@ async def run(reset: bool = False):
 
 if __name__ == "__main__":
     reset = "--reset" in sys.argv
-    asyncio.run(run(reset=reset))
+    reset_labels = "--reset-labels" in sys.argv
+    asyncio.run(run(reset=reset, reset_labels=reset_labels))
