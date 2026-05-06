@@ -22,7 +22,7 @@ from app.models import (
     Group, UserStory, StoryLabel, TaxonomyLabel, GroupAssignment
 )
 
-DATASET_PATH = Path("input_data/combined_output_VALIDATION_READY_EXPANDED_AI_LABELS_v007.xlsx")
+DATASET_PATH = Path("input_data/combined_output_VALIDATION_READY_EXPANDED_AI_LABELS_v009.xlsx")
 LABELBOOK_PATH = Path("labelbook/Revised labelbook proposal for Oulu.xlsx")
 
 GROUP_NAMES = ["Group A", "Group B", "Group C"]

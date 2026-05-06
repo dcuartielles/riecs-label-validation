@@ -1,4 +1,5 @@
 import io
+import re
 from collections import defaultdict
 from copy import copy
 from pathlib import Path
@@ -16,7 +17,7 @@ from app.models import AddedLabel, Group, LabelDecision, StoryLabel, TaxonomyLab
 
 router = APIRouter()
 
-DATASET_PATH = Path("input_data/unified_outcomes_v004_labelled_v002_UItest_v001.xlsx")
+DATASET_PATH = Path("input_data/combined_output_VALIDATION_READY_EXPANDED_AI_LABELS_v009.xlsx")
 LABELBOOK_PATH = Path("labelbook/Revised labelbook proposal for Oulu.xlsx")
 
 # ── Fill colours ──────────────────────────────────────────────────────────────
@@ -40,12 +41,17 @@ def copy_cell_style(src, dst):
         dst.border    = copy(src.border)
 
 
-def label_col_info(col: int) -> tuple[str, int] | None:
-    """Return (source, label_index) for spreadsheet columns 9-18, else None."""
-    if col < 9:
-        return None
-    offset = col - 9
-    return ("Human" if offset % 2 == 0 else "AI", offset // 2 + 1)
+def build_label_col_map(headers: list) -> dict[int, tuple[str, int]]:
+    """Map 1-based column index → (source, label_index) for Human/AI label columns."""
+    result = {}
+    for i, h in enumerate(headers):
+        if not h:
+            continue
+        m = re.match(r'^(Human|AI) label (\d+)$', str(h).strip(), re.IGNORECASE)
+        if m:
+            source = "Human" if m.group(1).lower() == "human" else "AI"
+            result[i + 1] = (source, int(m.group(2)))
+    return result
 
 
 # ── Overview sheet (Sheet 1) ──────────────────────────────────────────────────
@@ -61,6 +67,7 @@ def build_overview_sheet(ws_src, all_story_decisions: dict, story_added: dict, w
     """
     ws = wb_out.create_sheet(title="Overview")
     headers = [cell.value for cell in ws_src[1]]
+    label_col_map = build_label_col_map(headers)
 
     for col_idx, val in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col_idx, value=val)
@@ -113,6 +120,7 @@ def build_group_sheet(ws_src, story_decisions: dict, story_added: dict, group_na
     """One sheet per group with the original colour scheme."""
     ws = wb_out.create_sheet(title=group_name)
     headers = [cell.value for cell in ws_src[1]]
+    label_col_map = build_label_col_map(headers)
     max_added = max((len(v) for v in story_added.values()), default=0)
 
     for col_idx, val in enumerate(headers, 1):
@@ -138,8 +146,7 @@ def build_group_sheet(ws_src, story_decisions: dict, story_added: dict, group_na
             dst = ws.cell(row=row_num, column=src_cell.column, value=src_cell.value)
             copy_cell_style(src_cell, dst)
             col = src_cell.column
-            info = label_col_info(col)
-
+            info = label_col_map.get(col)
             if was_reviewed and not info:
                 dst.fill = FILL_YELLOW
             elif info:
