@@ -3,10 +3,11 @@ Automated screenshot capture for the README.
 Requires: pip install playwright && python -m playwright install chromium
 Run while the app is live on http://localhost:8000
 
-Emails visible on any page are replaced with fakeEmail.com addresses before
-the screenshot is taken (via JS text-node injection).
+Emails and real names visible on any page are replaced with fictional
+equivalents before the screenshot is taken (via JS text-node injection).
 """
 import asyncio
+import json
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -22,43 +23,62 @@ from app.models import Session as ReviewSession, User
 OUT = Path("docs/screenshots")
 BASE = "http://localhost:8000"
 
+FAKE_NAMES = [
+    "Alice Müller",
+    "Bob Eriksson",
+    "Carol Dupont",
+    "David Rossi",
+    "Eva Kowalski",
+    "Frank Andersen",
+    "Grace Nakamura",
+    "Hugo Ferreira",
+]
 
-# JS that replaces every email address in the live DOM with a fake one.
-# The first email found becomes admin@fakeEmail.com; the rest become user1@…, user2@…
+# Replaces every occurrence of the real strings with their fake counterparts.
+# replacements = [[real, fake], ...]  — applied in order, longest-first.
 ANONYMISE_JS = """
-(adminEmail) => {
-    const re = /[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}/g;
-    const map = {};
-    let n = 1;
+(replacements) => {
+    replacements.sort((a, b) => b[0].length - a[0].length);
     const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     let node;
     while ((node = walk.nextNode())) {
-        if (!re.test(node.textContent)) { re.lastIndex = 0; continue; }
-        re.lastIndex = 0;
-        node.textContent = node.textContent.replace(re, m => {
-            if (!map[m]) {
-                map[m] = (m === adminEmail) ? 'admin@fakeEmail.com'
-                                            : `user${n++}@fakeEmail.com`;
-            }
-            return map[m];
-        });
+        let t = node.textContent;
+        for (const [real, fake] of replacements) {
+            if (t.includes(real)) t = t.split(real).join(fake);
+        }
+        node.textContent = t;
     }
 }
 """
 
 
-async def get_admin(db):
-    result = await db.execute(select(User).where(User.is_admin == True))
-    user = result.scalars().first()
-    if not user:
-        result = await db.execute(select(User))
-        user = result.scalars().first()
-    if not user:
+async def build_replacements(db) -> tuple[list[list[str]], int, str]:
+    """Return (replacements, admin_id, admin_email)."""
+    result = await db.execute(select(User).order_by(User.id))
+    users = result.scalars().all()
+
+    admin = next((u for u in users if u.is_admin), users[0] if users else None)
+    if not admin:
         raise RuntimeError("No users in DB. Log in at least once first.")
-    return user
+
+    replacements = []
+    fake_idx = 0
+    for u in users:
+        is_admin = u.id == admin.id
+        fake_name = "Admin User" if is_admin else FAKE_NAMES[fake_idx % len(FAKE_NAMES)]
+        if not is_admin:
+            fake_idx += 1
+        fake_email = "admin@fakemail.com" if is_admin else f"user{fake_idx}@fakemail.com"
+
+        if u.name:
+            replacements.append([u.name, fake_name])
+        if u.email:
+            replacements.append([u.email, fake_email])
+
+    return replacements, admin.id, admin.email
 
 
-async def ensure_active_session(db, admin_id: int) -> int:
+async def ensure_active_session(db, admin_id: int):
     result = await db.execute(
         select(ReviewSession).where(ReviewSession.ended_at.is_(None))
     )
@@ -68,7 +88,7 @@ async def ensure_active_session(db, admin_id: int) -> int:
         db.add(session)
         await db.commit()
         await db.refresh(session)
-        return session.id, True   # (id, created_by_us)
+        return session.id, True
     return session.id, False
 
 
@@ -84,18 +104,17 @@ async def main():
     await init_db()
 
     async with SessionLocal() as db:
-        admin = await get_admin(db)
-        admin_id = admin.id
-        admin_email = admin.email
+        replacements, admin_id, admin_email = await build_replacements(db)
         session_id, we_created = await ensure_active_session(db, admin_id)
 
-    print(f"Admin: {admin_email} -> admin@fakeEmail.com")
+    print(f"Admin: {admin_email} -> admin@fakemail.com")
     print(f"Session {session_id} ({'created' if we_created else 'reused'})")
+    repl_json = json.dumps(replacements)
 
     async with async_playwright() as p:
         browser = await p.chromium.launch()
 
-        # ── 1. Login page (unauthenticated context) ──────────────────────────
+        # ── 1. Login page (unauthenticated) ──────────────────────────────────
         ctx_anon = await browser.new_context(viewport={"width": 1280, "height": 800})
         page_anon = await ctx_anon.new_page()
         await page_anon.goto(f"{BASE}/login")
@@ -113,12 +132,15 @@ async def main():
             await browser.close()
             return
 
-        # ── 2. Waiting page (end session temporarily) ─────────────────────────
+        async def anon(pg):
+            await pg.evaluate(f"({ANONYMISE_JS})({repl_json})")
+
+        # ── 2. Waiting page ───────────────────────────────────────────────────
         async with SessionLocal() as db:
             await end_session(db, session_id)
         await page.goto(f"{BASE}/review")
         await page.wait_for_load_state("networkidle")
-        await page.evaluate(ANONYMISE_JS, admin_email)
+        await anon(page)
         await page.screenshot(path=str(OUT / "02-waiting.png"), full_page=True)
         print("  OK 02-waiting.png")
 
@@ -133,34 +155,40 @@ async def main():
         # ── 3. Review page ────────────────────────────────────────────────────
         await page.goto(f"{BASE}/review")
         await page.wait_for_load_state("networkidle")
-        await page.evaluate(ANONYMISE_JS, admin_email)
+        await anon(page)
         await page.screenshot(path=str(OUT / "03-review.png"), full_page=True)
         print("  OK 03-review.png")
 
         # ── 4. Statistics page ────────────────────────────────────────────────
         await page.goto(f"{BASE}/stats")
         await page.wait_for_load_state("networkidle")
-        await page.evaluate(ANONYMISE_JS, admin_email)
+        await anon(page)
         await page.screenshot(path=str(OUT / "04-stats.png"), full_page=True)
         print("  OK 04-stats.png")
 
         # ── 5. Infograph ──────────────────────────────────────────────────────
         await page.goto(f"{BASE}/infograph")
-        await page.wait_for_timeout(6000)   # wait for D3 simulation to settle
-        await page.evaluate(ANONYMISE_JS, admin_email)
+        await page.wait_for_timeout(6000)
+        await anon(page)
         await page.screenshot(path=str(OUT / "05-infograph.png"), full_page=True)
         print("  OK 05-infograph.png")
 
         # ── 6. Admin panel ────────────────────────────────────────────────────
         await page.goto(f"{BASE}/admin")
         await page.wait_for_load_state("networkidle")
-        await page.evaluate(ANONYMISE_JS, admin_email)
+        await anon(page)
         await page.screenshot(path=str(OUT / "06-admin.png"), full_page=True)
         print("  OK 06-admin.png")
 
+        # ── 7. Labels tab ─────────────────────────────────────────────────────
+        await page.goto(f"{BASE}/labels")
+        await page.wait_for_load_state("networkidle")
+        await anon(page)
+        await page.screenshot(path=str(OUT / "07-labels.png"), full_page=True)
+        print("  OK 07-labels.png")
+
         await browser.close()
 
-    # Clean up the session we created (leave it ended so DB is tidy)
     if we_created:
         async with SessionLocal() as db:
             await end_session(db, session_id)

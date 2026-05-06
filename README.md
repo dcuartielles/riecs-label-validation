@@ -125,7 +125,25 @@ Two download buttons are available:
 
 ---
 
-### 5. Explore the label co-occurrence map
+### 5. Browse the labelbook
+
+The Labels page shows the complete taxonomy — both the pre-loaded labelbook and any labels proposed during sessions.
+
+![Labels page](docs/screenshots/07-labels.png)
+
+A search box at the top filters the table in real time as you type. User-created labels are sorted to the top and marked with a yellow **new** tag.
+
+Each row shows:
+
+| Column | Content |
+|---|---|
+| **Label** (25%) | Top-level category — bold italic, shown only on the first row of each group |
+| **Sublabel** (25%) | The specific label name |
+| **Description** (50%) | Definition from the labelbook or entered when creating the label |
+
+---
+
+### 6. Explore the label co-occurrence map
 
 The Infographs page shows a force-directed network of all labels in the dataset.
 
