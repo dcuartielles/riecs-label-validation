@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Labels · Labelbook{% endblock %}
+{% block content %}
+
+<h1>Labelbook</h1>
+
+<div class="labelbook-search-wrap">
+  <input type="text" id="label-filter" placeholder="Search labels…"
+         list="label-filter-datalist" autocomplete="off"
+         oninput="filterLabels(this.value)"
+         class="labelbook-search">
+  <datalist id="label-filter-datalist">
+    {% for cat, sublabels in grouped.items() %}
+      <option value="{{ cat }}">
+      {% for lbl in sublabels %}
+        <option value="{{ lbl.sublabel }}">
+      {% endfor %}
+    {% endfor %}
+  </datalist>
+</div>
+
+<table class="labelbook-table">
+  <colgroup>
+    <col style="width:25%">
+    <col style="width:25%">
+    <col style="width:50%">
+  </colgroup>
+  <thead>
+    <tr>
+      <th>Label</th>
+      <th>Sublabel</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody id="label-tbody">
+    {% for cat, sublabels in grouped.items() %}
+      {% for lbl in sublabels %}
+      <tr class="labelbook-row{% if lbl.is_user_created %} is-new{% endif %}"
+          data-text="{{ (lbl.sublabel ~ ' ' ~ cat ~ ' ' ~ lbl.description) | lower }}">
+        <td class="labelbook-col-label">{% if loop.first %}{{ cat }}{% endif %}</td>
+        <td class="labelbook-col-sub">
+          {% if lbl.is_user_created %}<span class="badge badge-new">new</span>{% endif %}
+          {{ lbl.sublabel }}
+        </td>
+        <td class="labelbook-col-desc">{{ lbl.description }}</td>
+      </tr>
+      {% endfor %}
+    {% endfor %}
+  </tbody>
+</table>
+
+<p id="no-results" style="display:none" class="muted centered">No labels match your search.</p>
+
+<script>
+function filterLabels(val) {
+  val = val.trim().toLowerCase();
+  const rows = document.querySelectorAll("#label-tbody .labelbook-row");
+  let visible = 0;
+  rows.forEach(row => {
+    const match = !val || (row.dataset.text || "").includes(val);
+    row.style.display = match ? "" : "none";
+    if (match) visible++;
+  });
+  document.getElementById("no-results").style.display =
+    (visible === 0 && val) ? "block" : "none";
+}
+</script>
+
+{% endblock %}

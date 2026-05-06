@@ -1,8 +1,8 @@
+from app.templates import templates
 from datetime import datetime
 
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 
@@ -14,7 +14,6 @@ from app.models import (
 )
 
 router = APIRouter()
-templates = Jinja2Templates(directory="app/templates")
 
 
 async def require_admin(request: Request):

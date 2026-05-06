@@ -1,6 +1,6 @@
+from app.templates import templates
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from sqlalchemy import select, func, and_
 from sqlalchemy.orm import selectinload
 from app.auth import get_current_user
@@ -11,7 +11,6 @@ from app.models import (
 )
 
 router = APIRouter()
-templates = Jinja2Templates(directory="app/templates")
 
 
 @router.get("/stats", response_class=HTMLResponse)

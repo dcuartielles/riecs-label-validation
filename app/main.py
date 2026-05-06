@@ -5,7 +5,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from app.config import settings
 from app.database import init_db
-from app.routers import auth, review, admin, stats, export, infograph
+from app.routers import auth, review, admin, stats, export, infograph, labels
 
 app = FastAPI(title="Data Labelling Validation")
 
@@ -29,6 +29,7 @@ app.include_router(admin.router)
 app.include_router(stats.router)
 app.include_router(export.router)
 app.include_router(infograph.router)
+app.include_router(labels.router)
 
 
 @app.on_event("startup")

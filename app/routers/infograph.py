@@ -1,9 +1,9 @@
+from app.templates import templates
 from collections import defaultdict
 from itertools import combinations
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 
 from app.auth import get_current_user
@@ -11,7 +11,6 @@ from app.database import SessionLocal
 from app.models import LabelDecision, StoryLabel, TaxonomyLabel
 
 router = APIRouter()
-templates = Jinja2Templates(directory="app/templates")
 
 # Brand-adjacent palette for taxonomy categories
 _PALETTE = [

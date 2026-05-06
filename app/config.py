@@ -17,6 +17,8 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
+APP_VERSION = "v004"
+
 
 def find_latest_dataset() -> Path:
     """Return the highest-versioned dataset file in input_data/."""

@@ -1,8 +1,8 @@
+from app.templates import templates
 import json
 from difflib import SequenceMatcher
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
-from fastapi.templating import Jinja2Templates
 from sqlalchemy import select, and_
 from sqlalchemy.orm import selectinload
 import httpx
@@ -15,7 +15,6 @@ from app.models import (
 )
 
 router = APIRouter()
-templates = Jinja2Templates(directory="app/templates")
 
 SPARQL_ENDPOINT = "https://publications.europa.eu/webapi/rdf/sparql"
 

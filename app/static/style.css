@@ -346,6 +346,8 @@ select {
   font-size: 0.9rem;
 }
 
+#label-search::-webkit-calendar-picker-indicator { display: none !important; }
+
 .label-description {
   margin-top: 0.6rem;
   padding: 0.5rem 0.75rem;
@@ -495,6 +497,71 @@ select {
 .stat-number { font-size: 1.75rem; font-weight: 700; color: var(--navy); }
 .stat-label  { font-size: 0.78rem; color: var(--muted); margin-top: 0.15rem; }
 .stat-sub    { font-size: 0.7rem; color: #aab5bf; margin-top: 0.05rem; }
+
+/* ── Labelbook ── */
+.labelbook-search-wrap {
+  margin-bottom: 1.5rem;
+}
+.labelbook-search {
+  width: 100%;
+  padding: 0.6rem 0.9rem;
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  font-size: 1rem;
+  background: var(--white);
+}
+.labelbook-search:focus {
+  outline: none;
+  border-color: var(--steel);
+}
+
+.labelbook-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  border: 1px solid #b3b3b3;
+}
+.labelbook-table thead th {
+  background: #b3b3b3;
+  padding: 0.55rem 0.75rem;
+  text-align: left;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--navy);
+  border: 1px solid #999;
+  vertical-align: top;
+}
+.labelbook-table tbody tr:nth-child(odd)  { background: #e6e6e6; }
+.labelbook-table tbody tr:nth-child(even) { background: var(--white); }
+.labelbook-row.is-new td { background: #fffde8 !important; }
+.labelbook-row td {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #b3b3b3;
+  vertical-align: top;
+  text-align: left;
+  line-height: 1.5;
+  font-size: 0.9rem;
+}
+.labelbook-col-label {
+  font-weight: 700;
+  font-style: italic;
+  color: var(--navy);
+}
+.labelbook-col-sub { color: var(--text); }
+.labelbook-col-desc { color: var(--muted); }
+
+.badge-new {
+  background: #ffe066;
+  color: #7d6608;
+  border-radius: 4px;
+  padding: 0.1rem 0.45rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  white-space: nowrap;
+  vertical-align: middle;
+  margin-right: 0.3rem;
+}
 
 /* ── Utilities ── */
 .muted { color: var(--muted); }

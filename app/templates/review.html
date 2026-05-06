@@ -110,14 +110,9 @@
 
         <input type="text" id="label-search" placeholder="Find existing label"
                class="note-input" list="sublabel-datalist" autocomplete="off"
-               oninput="onLabelSearch(this.value)">
-        <datalist id="sublabel-datalist">
-          {% for top_label, sublabels in tax_tree.items() %}
-            {% for t in sublabels %}
-              <option value="{{ t.sublabel }}">
-            {% endfor %}
-          {% endfor %}
-        </datalist>
+               oninput="onLabelSearch(this.value)"
+               onchange="syncDropdownFromSearch(this.value)">
+        <datalist id="sublabel-datalist"></datalist>
       </div>
 
       <div class="form-row">
@@ -222,6 +217,10 @@
       <input type="hidden" name="top_label" id="hidden-toplabel">
       <input type="hidden" name="sublabel" id="hidden-sublabel">
       <input type="hidden" name="description" id="hidden-description">
+      <div style="margin-bottom:0.6rem">
+        <input type="text" id="new-description" placeholder="Definition (optional)"
+               class="note-input" style="width:100%">
+      </div>
       <div style="display:flex;gap:0.6rem;flex-wrap:wrap">
         <input type="text" name="note" placeholder="Optional note" class="note-input" style="flex:1">
         <button type="submit" id="create-btn" class="btn btn-add"
@@ -356,6 +355,8 @@ function prepareCreate() {
   if (!top || !sub) { alert("Please fill in both the category and the new label name."); return false; }
   document.getElementById("hidden-toplabel").value = top;
   document.getElementById("hidden-sublabel").value = sub;
+  document.getElementById("hidden-description").value =
+    document.getElementById("new-description").value.trim();
   return true;
 }
 
@@ -374,25 +375,49 @@ document.addEventListener("DOMContentLoaded", function () {
       } else {
         descBox.style.display = "none";
       }
+      // Sync text field to match the dropdown selection
+      const searchInput = document.getElementById("label-search");
+      if (searchInput) {
+        searchInput.value = entry ? (entry.sublabel || "") : "";
+      }
     });
   }
 });
 
-// ── Label search → dropdown sync ────────────────────────────────────────────
+// ── Label search → datalist population (fires on every keystroke) ────────────
 function onLabelSearch(val) {
-  val = val.trim().toLowerCase();
+  const rawVal = val.trim();
+  const lval = rawVal.toLowerCase();
+  const dl = document.getElementById("sublabel-datalist");
+  if (!dl) return;
+  if (rawVal.length >= 4) {
+    dl.innerHTML = "";
+    for (const entry of Object.values(taxData)) {
+      if (entry.sublabel && entry.sublabel.toLowerCase().includes(lval)) {
+        const opt = document.createElement("option");
+        opt.value = entry.sublabel;
+        dl.appendChild(opt);
+      }
+    }
+  } else {
+    dl.innerHTML = "";
+  }
+}
+
+// ── Sync dropdown when user commits a selection (change/blur) ─────────────────
+function syncDropdownFromSearch(val) {
+  const lval = val.trim().toLowerCase();
   const sel = document.getElementById("taxonomy-select");
-  if (!val) { sel.value = ""; return; }
+  if (!lval) { sel.value = ""; return; }
   for (const opt of sel.options) {
-    if (opt.text.trim().toLowerCase() === val) {
+    if (opt.text.trim().toLowerCase() === lval) {
       sel.value = opt.value;
       sel.dispatchEvent(new Event("change"));
       return;
     }
   }
-  // partial match fallback
   for (const opt of sel.options) {
-    if (opt.text.trim().toLowerCase().startsWith(val)) {
+    if (opt.text.trim().toLowerCase().startsWith(lval)) {
       sel.value = opt.value;
       sel.dispatchEvent(new Event("change"));
       return;
@@ -450,17 +475,10 @@ async function refreshTaxonomy() {
     catSel.value = savedCat;
   }
 
-  // Rebuild datalist for new-sublabel autofill
-  const dl = document.getElementById("sublabel-datalist");
-  if (dl) {
-    dl.innerHTML = "";
-    for (const subs of Object.values(data.tree)) {
-      for (const sub of subs) {
-        const opt = document.createElement("option");
-        opt.value = sub.sublabel;
-        dl.appendChild(opt);
-      }
-    }
+  // Refresh datalist if the search field already has 4+ characters
+  const searchInput = document.getElementById("label-search");
+  if (searchInput) {
+    onLabelSearch(searchInput.value);
   }
 }
 
