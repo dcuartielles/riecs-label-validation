@@ -96,7 +96,7 @@
 
       <script id="tax-data" type="application/json">{{ tax_json | safe }}</script>
 
-      <div class="form-row">
+      <div class="form-row" style="margin-bottom:0.5rem">
         <select name="taxonomy_label_id" id="taxonomy-select">
           <option value="">— select a label —</option>
           {% for top_label, sublabels in tax_tree.items() %}
@@ -108,6 +108,19 @@
           {% endfor %}
         </select>
 
+        <input type="text" id="label-search" placeholder="Find existing label"
+               class="note-input" list="sublabel-datalist" autocomplete="off"
+               oninput="onLabelSearch(this.value)">
+        <datalist id="sublabel-datalist">
+          {% for top_label, sublabels in tax_tree.items() %}
+            {% for t in sublabels %}
+              <option value="{{ t.sublabel }}">
+            {% endfor %}
+          {% endfor %}
+        </datalist>
+      </div>
+
+      <div class="form-row">
         <input type="text" name="note" placeholder="Optional note" class="note-input">
         <button type="submit" class="btn btn-add">Add label</button>
       </div>
@@ -195,15 +208,7 @@
     <!-- Row 2: new label name + EuroVoc check -->
     <div style="display:flex;gap:0.6rem;margin-bottom:0.6rem;flex-wrap:wrap;align-items:center">
       <input id="new-sublabel" type="text" placeholder="New label name"
-             class="note-input" style="flex:1" oninput="onSublabelInput()"
-             list="sublabel-datalist" autocomplete="off">
-      <datalist id="sublabel-datalist">
-        {% for top_label, sublabels in tax_tree.items() %}
-          {% for t in sublabels %}
-            <option value="{{ t.sublabel }}">
-          {% endfor %}
-        {% endfor %}
-      </datalist>
+             class="note-input" style="flex:1" oninput="onSublabelInput()">
       <button type="button" class="btn btn-nav" onclick="checkSublabel()">Check EU terms</button>
     </div>
 
@@ -372,6 +377,28 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 });
+
+// ── Label search → dropdown sync ────────────────────────────────────────────
+function onLabelSearch(val) {
+  val = val.trim().toLowerCase();
+  const sel = document.getElementById("taxonomy-select");
+  if (!val) { sel.value = ""; return; }
+  for (const opt of sel.options) {
+    if (opt.text.trim().toLowerCase() === val) {
+      sel.value = opt.value;
+      sel.dispatchEvent(new Event("change"));
+      return;
+    }
+  }
+  // partial match fallback
+  for (const opt of sel.options) {
+    if (opt.text.trim().toLowerCase().startsWith(val)) {
+      sel.value = opt.value;
+      sel.dispatchEvent(new Event("change"));
+      return;
+    }
+  }
+}
 
 // ── Live taxonomy refresh (every 60 s) ───────────────────────────────────────
 async function refreshTaxonomy() {
