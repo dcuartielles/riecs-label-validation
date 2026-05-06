@@ -1,4 +1,5 @@
 import re
+import subprocess
 from pathlib import Path
 
 from pydantic_settings import BaseSettings
@@ -17,7 +18,20 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-APP_VERSION = "v005"
+def _git_version() -> str:
+    try:
+        result = subprocess.run(
+            ["git", "describe", "--tags", "--abbrev=0"],
+            capture_output=True, text=True,
+            cwd=Path(__file__).parent.parent,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return "dev"
+
+APP_VERSION = _git_version()
 
 
 def find_latest_dataset() -> Path:
