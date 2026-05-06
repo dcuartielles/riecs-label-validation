@@ -207,9 +207,15 @@ Place the stories spreadsheet in `input_data/` and the taxonomy file in `labelbo
 python -m scripts.import_data
 ```
 
-Add `--reset` to wipe and reimport from scratch.
+The script auto-detects the highest-versioned file in `input_data/`, so dropping in a new spreadsheet is all that is needed before re-running.
 
-The import script reads the dataset spreadsheet using named column headers, so it is robust to column reordering across dataset versions. Human label quality status is read from the interleaved `Human label N Status` columns and stored per label — status values are never imported as labels themselves.
+| Command | Effect |
+|---|---|
+| `python -m scripts.import_data` | Import if the database is empty; skip if data already exists |
+| `python -m scripts.import_data --reset` | Wipe stories, groups, and decisions; **keep** labels proposed during sessions |
+| `python -m scripts.import_data --reset --reset-labels` | Wipe everything including all taxonomy labels — use this when replacing the labelbook entirely |
+
+Human label quality status is read from the interleaved `Human label N Status` columns and stored per label — status values are never imported as labels themselves.
 
 ### Create the first admin
 
