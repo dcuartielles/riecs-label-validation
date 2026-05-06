@@ -17,7 +17,8 @@ from app.models import AddedLabel, Group, LabelDecision, StoryLabel, TaxonomyLab
 
 router = APIRouter()
 
-DATASET_PATH = Path("input_data/combined_output_VALIDATION_READY_EXPANDED_AI_LABELS_v009.xlsx")
+from app.config import find_latest_dataset
+DATASET_PATH = find_latest_dataset()
 LABELBOOK_PATH = Path("labelbook/Revised labelbook proposal for Oulu.xlsx")
 
 # ── Fill colours ──────────────────────────────────────────────────────────────
