@@ -31,7 +31,7 @@ from app.models import (
 
 from app.config import find_latest_dataset
 DATASET_PATH = find_latest_dataset()
-LABELBOOK_PATH = Path("labelbook/Revised labelbook proposal for Oulu.xlsx")
+LABELBOOK_PATH = Path("labelbook/Labelbook 2026-05-05_used.xlsx")
 
 GROUP_NAMES = ["Group A", "Group B", "Group C"]
 # Each group reviews this fraction of all stories; overlap comes from the random draws
@@ -137,8 +137,8 @@ def parse_taxonomy(path: Path) -> list[dict]:
     taxonomy = []
     current_label = None
 
-    # Main taxonomy starts at row 10 (row 10 is the sub-header)
-    for row in ws.iter_rows(min_row=11, max_row=ws.max_row,
+    # Row 1 is the header; data starts at row 2
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row,
                              min_col=3, max_col=6, values_only=True):
         label_col, sublabel_col, source_col, desc_col = row
 
