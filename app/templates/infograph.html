@@ -37,11 +37,43 @@ main { max-width: 1160px; }
 .ig-row { display:flex; gap:1.5rem; flex-wrap:wrap; }
 .ig-row .chart-card { flex:1; min-width:280px; }
 .no-data { color:var(--muted); font-size:0.9rem; padding:1rem 0; }
+#filter-bar {
+  display:none; align-items:center; gap:0.5rem; flex-wrap:wrap;
+  background:#fef9ec; border:1.5px solid #e8b84b; border-radius:8px;
+  padding:0.45rem 0.8rem; margin-bottom:1rem; font-size:0.82rem;
+}
+#filter-bar .fb-label { font-weight:700; color:#7a5800; white-space:nowrap; }
+.filter-chip {
+  display:inline-flex; align-items:center; gap:0.3rem;
+  background:#fff; border:1px solid #e8b84b; border-radius:20px;
+  padding:0.15rem 0.55rem; font-size:0.78rem; color:#555;
+}
+.filter-chip b { color:#2c324c; }
+.filter-chip button {
+  background:none; border:none; cursor:pointer; color:#888;
+  font-size:0.9rem; line-height:1; padding:0 0.1rem;
+}
+.filter-chip button:hover { color:#c00; }
+#filter-clear-all {
+  margin-left:auto; background:none; border:1px solid #e8b84b;
+  border-radius:6px; padding:0.15rem 0.55rem; cursor:pointer;
+  font-size:0.78rem; color:#7a5800; white-space:nowrap;
+}
+#filter-clear-all:hover { background:#fdedc0; }
+.clickable { cursor:pointer; }
+.clickable:hover { opacity:0.75; }
 </style>
 
 <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem;margin-bottom:1rem">
   <h1 style="margin-bottom:0">Infographics</h1>
   <span id="ig-status" class="muted" style="font-size:0.82rem">Loading…</span>
+</div>
+
+<!-- Active filter bar -->
+<div id="filter-bar">
+  <span class="fb-label">Filters:</span>
+  <span id="filter-chips"></span>
+  <button id="filter-clear-all" onclick="clearAllFilters()">Clear all</button>
 </div>
 
 <!-- Tab navigation -->
@@ -185,6 +217,33 @@ let gData = null;
 let activeTab = "freq";
 const rendered = new Set();
 
+// ── Filter state ──────────────────────────────────────────────────────────────
+let filterState = {};
+const FILTER_LABELS = {
+  partner: "Partner", main_category: "Category",
+  sublabel: "Label", target_user: "Target user", story_concept: "Concept",
+};
+
+function setFilter(key, val) {
+  if (filterState[key] === val) { delete filterState[key]; }
+  else { filterState[key] = val; }
+  rendered.clear();
+  loadData();
+}
+function clearFilter(key) { delete filterState[key]; rendered.clear(); loadData(); }
+function clearAllFilters() { filterState = {}; rendered.clear(); loadData(); }
+
+function updateFilterBar(filters) {
+  const bar   = document.getElementById("filter-bar");
+  const chips = document.getElementById("filter-chips");
+  if (!filters || !Object.keys(filters).length) { bar.style.display = "none"; return; }
+  bar.style.display = "flex";
+  chips.innerHTML = Object.entries(filters).map(([k, v]) =>
+    `<span class="filter-chip"><span>${FILTER_LABELS[k]||k}:</span> <b>${v}</b>` +
+    ` <button onclick="clearFilter('${k}')" title="Remove filter">×</button></span>`
+  ).join("");
+}
+
 // ── Tooltip ───────────────────────────────────────────────────────────────────
 const tip = document.getElementById("tip");
 function showTip(ev, html) {
@@ -239,12 +298,13 @@ function barSvg(svgId, data, legendId) {
     .selectAll("line").style("stroke","#eee");
 
   g.selectAll(".bar").data(top).join("rect")
-    .attr("class","bar")
+    .attr("class","bar clickable")
     .attr("x", d=>x(d.sublabel)).attr("y", d=>y(d.count))
     .attr("width", x.bandwidth()).attr("height", d=>h-y(d.count))
     .attr("fill", d=>d.color).attr("rx",2)
-    .on("mouseover",(ev,d)=>showTip(ev,`<strong>${d.sublabel}</strong><br>${d.main_category||''}<br>Count: <strong>${d.count}</strong>`))
-    .on("mousemove",moveTip).on("mouseout",hideTip);
+    .on("mouseover",(ev,d)=>showTip(ev,`<strong>${d.sublabel}</strong><br>${d.main_category||''}<br>Count: <strong>${d.count}</strong><br><em>Click to filter</em>`))
+    .on("mousemove",moveTip).on("mouseout",hideTip)
+    .on("click",(ev,d)=>setFilter("sublabel", d.sublabel));
 
   // Legend
   if (legendId) {
@@ -254,14 +314,16 @@ function barSvg(svgId, data, legendId) {
     lg.innerHTML = "";
     cats.forEach(d=>{
       const el = document.createElement("span");
-      el.className = "legend-item";
+      el.className = "legend-item clickable";
+      el.title = "Click to filter by category";
       el.innerHTML = `<span class="legend-dot" style="background:${d.color}"></span>${d.main_category}`;
+      el.onclick = () => setFilter("main_category", d.main_category);
       lg.appendChild(el);
     });
   }
 }
 
-function pieChart(svgId, data, labelField, valueField, colorFn) {
+function pieChart(svgId, data, labelField, valueField, colorFn, filterKey) {
   if (!data || !data.length) return;
   const el = document.getElementById(svgId);
   const W = el.clientWidth || 400, H = 340;
@@ -285,9 +347,12 @@ function pieChart(svgId, data, labelField, valueField, colorFn) {
   g.selectAll("path").data(pie(data)).join("path")
     .attr("d", arc).attr("fill", d=>colors(d.data[labelField]))
     .attr("stroke","#fff").attr("stroke-width",1.5)
+    .classed("clickable", !!filterKey)
     .on("mouseover",(ev,d)=>showTip(ev,
-      `<strong>${d.data[labelField]}</strong><br>Count: <strong>${d.data[valueField]}</strong><br>${(d.data[valueField]/total*100).toFixed(1)}%`))
-    .on("mousemove",moveTip).on("mouseout",hideTip);
+      `<strong>${d.data[labelField]}</strong><br>Count: <strong>${d.data[valueField]}</strong><br>${(d.data[valueField]/total*100).toFixed(1)}%` +
+      (filterKey ? "<br><em>Click to filter</em>" : "")))
+    .on("mousemove",moveTip).on("mouseout",hideTip)
+    .on("click", filterKey ? (ev,d)=>setFilter(filterKey, d.data[labelField]) : null);
 
   g.selectAll("text.pct").data(pie(data)).join("text")
     .attr("class","pct")
@@ -339,9 +404,10 @@ function networkChart(svgId, legendId, nodes_raw, links_raw) {
 
   const nodeSel = g.append("g").selectAll("circle").data(nodes).join("circle")
     .attr("r",d=>nodeR(d)).attr("fill",d=>d.color).attr("stroke","#fff").attr("stroke-width",1.5)
-    .style("cursor","grab")
-    .on("mouseover",(ev,d)=>showTip(ev,`<strong>${d.sublabel}</strong><br>${d.main_category||''}<br>Appears in <strong>${d.count}</strong> stories`))
+    .style("cursor","pointer")
+    .on("mouseover",(ev,d)=>showTip(ev,`<strong>${d.sublabel}</strong><br>${d.main_category||''}<br>Appears in <strong>${d.count}</strong> stories<br><em>Click to filter</em>`))
     .on("mousemove",moveTip).on("mouseout",hideTip)
+    .on("click",(ev,d)=>{ ev.stopPropagation(); setFilter("sublabel", d.sublabel); })
     .call(d3.drag()
       .on("start",(ev,d)=>{ if(!ev.active)sim.alphaTarget(0.3).restart(); d.fx=d.x;d.fy=d.y; })
       .on("drag",(ev,d)=>{ d.fx=ev.x;d.fy=ev.y; })
@@ -454,8 +520,10 @@ function treemap(svgId, data, minCount=5) {
   leaf.append("rect")
     .attr("width",d=>d.x1-d.x0).attr("height",d=>d.y1-d.y0)
     .attr("fill",d=>d.data.color).attr("opacity",0.82).attr("stroke","#fff").attr("stroke-width",0.5)
-    .on("mouseover",(ev,d)=>showTip(ev,`<strong>${d.data.name}</strong><br>${d.data.main||''}<br>Count: <strong>${d.data.value}</strong>`))
-    .on("mousemove",moveTip).on("mouseout",hideTip);
+    .classed("clickable",true)
+    .on("mouseover",(ev,d)=>showTip(ev,`<strong>${d.data.name}</strong><br>${d.data.main||''}<br>Count: <strong>${d.data.value}</strong><br><em>Click to filter</em>`))
+    .on("mousemove",moveTip).on("mouseout",hideTip)
+    .on("click",(ev,d)=>setFilter("sublabel", d.data.name));
 
   leaf.append("text")
     .attr("x",3).attr("y",12).style("font-size","9px").style("fill","#fff").style("font-weight","bold")
@@ -506,7 +574,8 @@ function stackedBar(svgId, legendId, partnerData) {
   const y = d3.scaleLinear().domain([0,d3.max(stackData,d=>d._total)]).nice().range([h,0]);
 
   g.append("g").attr("transform",`translate(0,${h})`).call(d3.axisBottom(x))
-    .selectAll("text").attr("transform","rotate(-35)").style("text-anchor","end").style("font-size","10px");
+    .selectAll("text").attr("transform","rotate(-35)").style("text-anchor","end").style("font-size","10px")
+    .style("cursor","pointer").on("click",(ev,d)=>setFilter("partner", d));
   g.append("g").call(d3.axisLeft(y).ticks(5));
   g.append("g").call(d3.axisLeft(y).ticks(5).tickSize(-w).tickFormat(""))
     .selectAll("line").style("stroke","#eee");
@@ -516,9 +585,11 @@ function stackedBar(svgId, legendId, partnerData) {
       .attr("x",d=>x(d.data.partner)).attr("y",d=>y(d[1]))
       .attr("width",x.bandwidth()).attr("height",d=>Math.max(0,y(d[0])-y(d[1])))
       .attr("fill",catColorMap[layer.key]||"#888")
+      .classed("clickable",true)
       .on("mouseover",(ev,d)=>showTip(ev,
-        `<strong>${d.data.partner}</strong><br>${layer.key}<br>Count: <strong>${d.data[layer.key]}</strong>`))
-      .on("mousemove",moveTip).on("mouseout",hideTip);
+        `<strong>${d.data.partner}</strong><br>${layer.key}<br>Count: <strong>${d.data[layer.key]}</strong><br><em>Click to filter by category</em>`))
+      .on("mousemove",moveTip).on("mouseout",hideTip)
+      .on("click",(ev,d)=>setFilter("main_category", layer.key));
   });
 
   if (legendId) {
@@ -580,7 +651,7 @@ function paretoChart(svgId, data) {
   }
 }
 
-function groupedHeatmap(svgId, byGroup) {
+function groupedHeatmap(svgId, byGroup, groupFilterKey) {
   // Heatmap-style: rows=groups, cols=top labels, cell=count
   const groups = Object.keys(byGroup);
   if (!groups.length) { return; }
@@ -620,7 +691,11 @@ function groupedHeatmap(svgId, byGroup) {
     // Row label
     svg.append("text").attr("x",padL-4).attr("y",padT+gi*cellH+cellH/2+4)
       .attr("text-anchor","end").style("font-size","9px").style("fill","#333")
-      .text(grp.length>22?grp.slice(0,22)+"…":grp);
+      .style("cursor", groupFilterKey ? "pointer" : "default")
+      .text(grp.length>22?grp.slice(0,22)+"…":grp)
+      .on("click", groupFilterKey ? ()=>setFilter(groupFilterKey, grp) : null)
+      .on("mouseover", groupFilterKey ? ev=>showTip(ev,`Filter by: <strong>${grp}</strong>`) : null)
+      .on("mousemove", moveTip).on("mouseout", hideTip);
   });
 
   // Column labels
@@ -664,8 +739,8 @@ function renderTab(tab) {
     barSvg("c01-svg", d.label_freq, "c01-legend");
     barSvg("c10-svg", d.tech_label_freq, "c10-legend");
   } else if (tab==="pies") {
-    pieChart("c02-svg", d.target_user_freq, "sublabel", "count");
-    pieChart("c03-svg", d.concept_freq, "concept", "count");
+    pieChart("c02-svg", d.target_user_freq, "sublabel", "count", null, "target_user");
+    pieChart("c03-svg", d.concept_freq, "concept", "count", null, "story_concept");
   } else if (tab==="net") {
     networkChart("c04-svg","c04-legend", d.label_freq, d.cooccurrence);
     networkChart("c11-svg","c11-legend", d.tech_label_freq, d.tech_cooccurrence);
@@ -680,8 +755,8 @@ function renderTab(tab) {
     paretoChart("c08-svg", d.label_freq);
     paretoChart("c13-svg", d.tech_label_freq);
   } else if (tab==="breakdown") {
-    groupedHeatmap("c14-svg", d.user_type_tech_freq);
-    groupedHeatmap("c15-svg", d.concept_tech_freq);
+    groupedHeatmap("c14-svg", d.user_type_tech_freq, "target_user");
+    groupedHeatmap("c15-svg", d.concept_tech_freq, "story_concept");
     peerBar("c-peer-svg", d.peer_review);
   }
 }
@@ -689,13 +764,16 @@ function renderTab(tab) {
 // ── Load + auto-refresh ───────────────────────────────────────────────────────
 async function loadData() {
   try {
-    const resp = await fetch("/infograph/data");
+    const params = new URLSearchParams(filterState).toString();
+    const resp = await fetch("/infograph/data" + (params ? "?" + params : ""));
     if (!resp.ok) return;
     gData = await resp.json();
+    updateFilterBar(gData.active_filters || {});
     const total = gData.total_labels || 0;
     const stories = gData.total_stories || 0;
+    const filterNote = Object.keys(gData.active_filters||{}).length ? " (filtered)" : "";
     document.getElementById("ig-status").textContent =
-      `${total} label${total!==1?"s":""} across ${stories} stories — last refreshed ${new Date().toLocaleTimeString()}`;
+      `${total} label${total!==1?"s":""} across ${stories} stories${filterNote} — last refreshed ${new Date().toLocaleTimeString()}`;
     rendered.clear();
     renderTab(activeTab);
   } catch(e) {

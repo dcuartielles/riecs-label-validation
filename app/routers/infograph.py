@@ -67,7 +67,15 @@ async def infograph(request: Request):
 
 
 @router.get("/infograph/data")
-async def infograph_data(request: Request, session_id: int | None = None):
+async def infograph_data(
+    request: Request,
+    session_id:    int | None = None,
+    partner:       str | None = None,
+    main_category: str | None = None,
+    sublabel:      str | None = None,
+    target_user:   str | None = None,
+    story_concept: str | None = None,
+):
     user = await get_current_user(request)
     if not user:
         return JSONResponse({"error": "unauthorized"}, status_code=401)
@@ -108,6 +116,50 @@ async def infograph_data(request: Request, session_id: int | None = None):
 
         stories = (await db.execute(select(UserStory))).scalars().all()
         sid_utype = {s.id: (s.user_type or "Unknown").strip() for s in stories}
+
+    # ── Filtering ──────────────────────────────────────────────────────────
+    active_filters = {k: v for k, v in {
+        "partner": partner, "main_category": main_category,
+        "sublabel": sublabel, "target_user": target_user,
+        "story_concept": story_concept,
+    }.items() if v}
+
+    if active_filters:
+        # Story-level filters: derive from original data before row-level filters
+        filtered_sids: set[int] | None = None
+
+        if target_user:
+            s = {mc.story_id for mc in mc_rows
+                 if mc.target_user and mc.target_user.strip() == target_user}
+            filtered_sids = s if filtered_sids is None else filtered_sids & s
+
+        if story_concept:
+            s = {mc.story_id for mc in mc_rows if story_concept in (mc.concepts or [])}
+            filtered_sids = s if filtered_sids is None else filtered_sids & s
+
+        if sublabel:
+            s = {
+                al.story_id for al in rows
+                if al.taxonomy_label and al.taxonomy_label.sublabel
+                and al.taxonomy_label.sublabel.strip() == sublabel
+            }
+            filtered_sids = s if filtered_sids is None else filtered_sids & s
+
+        # Row-level filters
+        if partner:
+            p_gid = next((gid for gid, name in gid_name.items() if name == partner), None)
+            rows = [al for al in rows if al.user and al.user.group_id == p_gid] if p_gid else []
+
+        if main_category:
+            rows = [
+                al for al in rows
+                if al.taxonomy_label and al.taxonomy_label.sublabel
+                and sub_to_main.get(al.taxonomy_label.sublabel.strip(), "") == main_category
+            ]
+
+        if filtered_sids is not None:
+            rows    = [al for al in rows    if al.story_id in filtered_sids]
+            mc_rows = [mc for mc in mc_rows if mc.story_id in filtered_sids]
 
     # ── Aggregation ────────────────────────────────────────────────────────
     freq:      dict[str, int] = defaultdict(int)
@@ -223,4 +275,5 @@ async def infograph_data(request: Request, session_id: int | None = None):
         "categories":         [{"name": k, "color": v} for k, v in CAT_COLOURS.items()],
         "total_stories":      len(s_all),
         "total_labels":       sum(freq.values()),
+        "active_filters":     active_filters,
     })
