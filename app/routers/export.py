@@ -33,6 +33,9 @@ FILL_HDR      = PatternFill(start_color="70AD47", end_color="70AD47", fill_type=
 FILL_HDR_NEW  = PatternFill(start_color="375623", end_color="375623", fill_type="solid")
 FILL_STAT_HDR = PatternFill(start_color="2C324C", end_color="2C324C", fill_type="solid")
 FILL_ORANGE   = PatternFill(start_color="FCE4D6", end_color="FCE4D6", fill_type="solid")
+FILL_AMBER    = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
+FILL_BLUE_HDR = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+FILL_RED_HDR  = PatternFill(start_color="C00000", end_color="C00000", fill_type="solid")
 
 FONT_WHITE_BOLD = Font(bold=True, color="FFFFFF")
 
@@ -206,6 +209,188 @@ def build_summary_sheet(wb_out, groups: list, stories: list[UserStory],
     return ws
 
 
+def build_rejection_relevance_sheet(wb_out, groups, all_stories,
+                                     per_group_rejection, per_group_relevance,
+                                     gid_name: dict, uid_name: dict):
+    """Stories flagged as rejected or elevated relevance, one row per partner per story."""
+    ws = wb_out.create_sheet(title="Rejections & Relevance")
+    cols = ["Story ID", "Workshop", "User type", "Task",
+            "Partner", "Actor", "Rejected", "Rejection reason", "Relevance", "Relevance reason"]
+    _write_header_row(ws, cols, FILL_RED_HDR)
+
+    sid_story = {s.id: s for s in all_stories}
+    rows = []
+
+    for group in groups:
+        gid = group.id
+        all_sids = set(per_group_rejection.get(gid, {}).keys()) | set(per_group_relevance.get(gid, {}).keys())
+        for sid in all_sids:
+            rej = per_group_rejection.get(gid, {}).get(sid)
+            rel = per_group_relevance.get(gid, {}).get(sid)
+            is_rejected = bool(rej and rej.rejected)
+            score = rel.score if rel else "Normal"
+            if not is_rejected and score == "Normal":
+                continue
+            story = sid_story.get(sid)
+            if not story:
+                continue
+            actor_uid = (rej.user_id if rej else None) or (rel.user_id if rel else None)
+            rows.append({
+                "story": story,
+                "partner": gid_name.get(gid, "?"),
+                "actor": uid_name.get(actor_uid, "?") if actor_uid else "",
+                "rejected": "Yes" if is_rejected else "No",
+                "rej_reason": rej.reason if rej and rej.reason else "",
+                "score": score,
+                "rel_reason": rel.reason if rel and rel.reason else "",
+                "sort_key": (0 if is_rejected else 1,
+                             {"VeryHigh": 0, "High": 1}.get(score, 2),
+                             story.story_id or ""),
+            })
+
+    rows.sort(key=lambda r: r["sort_key"])
+
+    for row_idx, rd in enumerate(rows, start=2):
+        s = rd["story"]
+        vals = [s.story_id, s.workshop or "", s.user_type or "", (s.task or "")[:120],
+                rd["partner"], rd["actor"], rd["rejected"], rd["rej_reason"],
+                rd["score"], rd["rel_reason"]]
+        for c, val in enumerate(vals, 1):
+            cell = ws.cell(row=row_idx, column=c, value=val)
+            if rd["rejected"] == "Yes":
+                cell.fill = FILL_LT_RED
+            elif rd["score"] == "VeryHigh":
+                cell.fill = FILL_ORANGE
+            elif rd["score"] == "High":
+                cell.fill = FILL_AMBER
+
+    _autofit(ws)
+    return ws
+
+
+def build_stats_conflicts_sheet(wb_out, groups, all_stories,
+                                  per_group_added, per_group_mandatory,
+                                  per_group_rejection, per_group_relevance,
+                                  assigned_counts: dict):
+    """Per-partner statistics table + conflict list for stories reviewed by 2+ partners."""
+    ws = wb_out.create_sheet(title="Statistics & Conflicts")
+
+    # ── Section 1: per-partner statistics ──────────────────────────────────
+    title_cell = ws.cell(row=1, column=1, value="Per-partner statistics")
+    title_cell.font = Font(bold=True, size=13, color="FFFFFF")
+    title_cell.fill = FILL_BLUE_HDR
+
+    stat_cols = ["Partner", "Stories assigned", "Stories labelled",
+                 "Labels added", "Mandatory filled", "Rejected", "High/VH relevance"]
+    for c, col in enumerate(stat_cols, 1):
+        cell = ws.cell(row=2, column=c, value=col)
+        cell.font = FONT_WHITE_BOLD
+        cell.fill = FILL_STAT_HDR
+
+    for r, group in enumerate(groups, start=3):
+        gid = group.id
+        added    = per_group_added.get(gid, {})
+        mandatory = per_group_mandatory.get(gid, {})
+        rejection = per_group_rejection.get(gid, {})
+        relevance = per_group_relevance.get(gid, {})
+
+        vals = [
+            group.name,
+            assigned_counts.get(gid, 0),
+            sum(1 for lbls in added.values() if lbls),
+            sum(len(lbls) for lbls in added.values()),
+            len(mandatory),
+            sum(1 for rj in rejection.values() if rj.rejected),
+            sum(1 for rv in relevance.values() if rv.score in ("High", "VeryHigh")),
+        ]
+        for c, val in enumerate(vals, 1):
+            ws.cell(row=r, column=c, value=val)
+
+    gap = len(groups) + 4
+
+    # ── Section 2: conflicts ────────────────────────────────────────────────
+    title_cell2 = ws.cell(row=gap, column=1, value="Conflicts (stories reviewed by 2+ partners)")
+    title_cell2.font = Font(bold=True, size=13, color="FFFFFF")
+    title_cell2.fill = FILL_RED_HDR
+
+    conflict_cols = ["Story ID", "Workshop", "User type", "Task",
+                     "Partners reviewed", "Conflict on"] + [g.name for g in groups]
+    for c, col in enumerate(conflict_cols, 1):
+        cell = ws.cell(row=gap + 1, column=c, value=col)
+        cell.font = FONT_WHITE_BOLD
+        cell.fill = FILL_STAT_HDR if c <= 6 else FILL_HDR
+
+    conflict_rows = []
+    for story in all_stories:
+        sid = story.id
+        groups_with_data = [
+            g for g in groups
+            if per_group_added.get(g.id, {}).get(sid)
+            or sid in per_group_mandatory.get(g.id, {})
+        ]
+        if len(groups_with_data) < 2:
+            continue
+
+        tu_vals = {
+            per_group_mandatory.get(g.id, {}).get(sid).target_user
+            for g in groups_with_data
+            if per_group_mandatory.get(g.id, {}).get(sid) and
+               per_group_mandatory[g.id][sid].target_user
+        }
+        lbl_sets = [
+            frozenset(
+                (lbl["sublabel"] or lbl["label"])
+                for lbl in per_group_added.get(g.id, {}).get(sid, [])
+            )
+            for g in groups_with_data
+        ]
+        tu_conflict  = len(tu_vals) > 1
+        lbl_union    = set.union(*lbl_sets) if lbl_sets else set()
+        lbl_intersect = set.intersection(*lbl_sets) if lbl_sets else set()
+        lbl_conflict = len(lbl_union) > len(lbl_intersect)
+
+        if not (tu_conflict or lbl_conflict):
+            continue
+
+        conflict_rows.append({
+            "story": story,
+            "n_partners": len(groups_with_data),
+            "conflict_on": ", ".join(
+                (["Target user"] if tu_conflict else []) +
+                (["Labels"] if lbl_conflict else [])
+            ),
+        })
+
+    conflict_rows.sort(key=lambda r: -r["n_partners"])
+
+    for row_idx, rd in enumerate(conflict_rows, start=gap + 2):
+        s = rd["story"]
+        base = [s.story_id, s.workshop or "", s.user_type or "",
+                (s.task or "")[:100], rd["n_partners"], rd["conflict_on"]]
+        for c, val in enumerate(base, 1):
+            cell = ws.cell(row=row_idx, column=c, value=val)
+            cell.fill = FILL_ORANGE
+
+        for g_idx, group in enumerate(groups):
+            mc   = per_group_mandatory.get(group.id, {}).get(s.id)
+            lbls = per_group_added.get(group.id, {}).get(s.id, [])
+            if mc or lbls:
+                tu_str  = mc.target_user if mc else ""
+                lbl_str = ", ".join(
+                    (lbl["sublabel"] or lbl["label"]) for lbl in lbls
+                )[:80]
+                cell_val = ("TU: " + tu_str if tu_str else "") + \
+                           ("\nLabels: " + lbl_str if lbl_str else "")
+            else:
+                cell_val = ""
+            cell = ws.cell(row=row_idx, column=7 + g_idx, value=cell_val)
+            if cell_val:
+                cell.alignment = Alignment(wrap_text=True)
+
+    _autofit(ws)
+    return ws
+
+
 @router.get("/export")
 async def export_all(request: Request, session_id: int | None = None):
     user = await get_current_user(request)
@@ -231,6 +416,11 @@ async def export_all(request: Request, session_id: int | None = None):
             select(UserStory).order_by(UserStory.story_id)
         )).scalars().all()
         story_by_id = {s.id: s for s in all_stories}
+
+        # User name lookup for actor attribution
+        all_users = (await db.execute(select(User))).scalars().all()
+        uid_name = {u.id: u.name for u in all_users}
+        gid_name = {g.id: g.name for g in groups}
 
         # Per-group data maps: group_id → {story_id → data}
         per_group_added:     dict[int, dict[int, list]] = {}
@@ -278,6 +468,15 @@ async def export_all(request: Request, session_id: int | None = None):
                 rel_filter.append(StoryRelevance.session_id == rev_session.id)
             rel_rows = (await db.execute(select(StoryRelevance).where(*rel_filter))).scalars().all()
             per_group_relevance[gid] = {r.story_id: r for r in rel_rows}
+
+        # Count stories assigned per group (for stats sheet)
+        assigned_counts: dict[int, int] = {}
+        for group in groups:
+            res = await db.execute(
+                select(func.count(GroupAssignment.id))
+                .where(GroupAssignment.group_id == group.id)
+            )
+            assigned_counts[group.id] = res.scalar() or 0
 
         # Global max labels (for column alignment)
         max_labels_global = max(
@@ -332,13 +531,31 @@ async def export_all(request: Request, session_id: int | None = None):
             per_group_relevance,
         )
 
+        # Rejections & Relevance sheet
+        build_rejection_relevance_sheet(
+            wb_out, groups, all_stories,
+            per_group_rejection, per_group_relevance,
+            gid_name, uid_name,
+        )
+
+        # Statistics & Conflicts sheet
+        build_stats_conflicts_sheet(
+            wb_out, groups, all_stories,
+            per_group_added, per_group_mandatory,
+            per_group_rejection, per_group_relevance,
+            assigned_counts,
+        )
+
+    session_suffix = f"session_{rev_session.id}" if rev_session else "all"
+    filename = f"label_results_{session_suffix}.xlsx"
+
     buf = io.BytesIO()
     wb_out.save(buf)
     buf.seek(0)
     return StreamingResponse(
         buf,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=label_results.xlsx"},
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
 
 
