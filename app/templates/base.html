@@ -7,14 +7,14 @@
   <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
   <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
   <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16.png">
-  <link rel="stylesheet" href="/static/style.css?v=4">
+  <link rel="stylesheet" href="/static/style.css?v=7">
 </head>
 <body>
 <script src="/static/app.js" defer></script>
   <header>
     <nav>
       <img src="/static/riecs-glyph.png" alt="RIECS concept" class="nav-logo">
-      <span class="nav-subtitle">Label Validation {{ APP_VERSION }}</span>
+      <span class="nav-subtitle">Label of User Stories {{ APP_VERSION }}</span>
       {% if user %}
         <span class="user-info">{{ user.name }}{% if user.group %} · {{ user.group.name }}{% endif %}</span>
         <div class="nav-links">

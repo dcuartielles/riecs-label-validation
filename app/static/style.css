@@ -563,6 +563,157 @@ select {
   margin-right: 0.3rem;
 }
 
+/* ── Review two-column layout ── */
+.review-columns {
+  display: flex;
+  gap: 1.5rem;
+  align-items: flex-start;
+}
+
+.review-left {
+  flex: 1.6;
+  min-width: 0;
+}
+
+.review-right {
+  flex: 1;
+  min-width: 260px;
+  max-width: 360px;
+  position: sticky;
+  top: 5rem;
+  max-height: calc(100vh - 5.5rem);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding-right: 2px;
+  scrollbar-width: thin;
+}
+
+/* ── Mandatory classification panels ── */
+.mandatory-section {
+  background: var(--white);
+  border-radius: 12px;
+  padding: 1.1rem;
+  border: 2px solid #e8b84b;
+  box-shadow: 0 2px 8px rgba(44,50,76,0.07);
+}
+.mandatory-section.filled {
+  border-color: var(--sage);
+}
+.mandatory-section h3 {
+  font-size: 0.88rem;
+  margin-bottom: 0.65rem;
+  color: var(--navy);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.required-badge {
+  font-size: 0.65rem;
+  font-weight: 700;
+  background: #e8b84b;
+  color: #7d5010;
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.mandatory-section.filled .required-badge {
+  background: var(--sage);
+  color: var(--white);
+}
+
+/* ── Radio / checkbox groups ── */
+.radio-group, .checkbox-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-bottom: 0.65rem;
+}
+.radio-group label, .checkbox-group label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-size: 0.88rem;
+  padding: 0.25rem 0.4rem;
+  border-radius: 5px;
+  transition: background 0.1s;
+}
+.radio-group label:hover, .checkbox-group label:hover { background: #f0f4f7; }
+
+/* ── Operations card (generic sidebar card) ── */
+.ops-card {
+  background: var(--white);
+  border-radius: 12px;
+  padding: 1.1rem;
+  box-shadow: 0 2px 8px rgba(44,50,76,0.07);
+}
+.ops-card h3 {
+  font-size: 0.88rem;
+  margin-bottom: 0.65rem;
+  color: var(--navy);
+  font-weight: 700;
+}
+
+/* ── Rejection toggle ── */
+.rejection-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+.rejection-toggle input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; }
+
+/* ── Relevance pill options ── */
+.relevance-options {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+.relevance-options label {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 99px;
+  border: 2px solid var(--border);
+  cursor: pointer;
+  font-size: 0.82rem;
+  transition: all 0.12s;
+}
+.relevance-options label:has(input:checked) {
+  border-color: var(--teal);
+  background: #e8f4f8;
+  font-weight: 600;
+}
+.relevance-options label.high:has(input:checked) {
+  border-color: #e8a040;
+  background: #fef6e8;
+}
+.relevance-options label.very-high:has(input:checked) {
+  border-color: #c0392b;
+  background: #fdf3f3;
+}
+
+/* ── Teammate labels section ── */
+.teammate-section {
+  background: var(--white);
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+  box-shadow: 0 2px 8px rgba(44,50,76,0.07);
+  border-left: 4px solid var(--steel);
+}
+.teammate-section h2 {
+  font-size: 1rem;
+  margin-bottom: 1rem;
+  color: var(--navy);
+}
+
 /* ── Utilities ── */
 .muted { color: var(--muted); }
 

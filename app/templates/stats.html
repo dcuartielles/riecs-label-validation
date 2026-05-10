@@ -51,24 +51,24 @@
       <div class="stats-grid">
         <div class="stat-card">
           <span class="stat-number">{{ gs.stories_reviewed }}</span>
-          <span class="stat-label">Stories reviewed</span>
+          <span class="stat-label">Stories labelled</span>
           <span class="stat-sub">of {{ gs.total_assigned }} assigned</span>
-        </div>
-        <div class="stat-card confirm">
-          <span class="stat-number">{{ gs.confirmed }}</span>
-          <span class="stat-label">Labels confirmed</span>
-        </div>
-        <div class="stat-card reject">
-          <span class="stat-number">{{ gs.rejected }}</span>
-          <span class="stat-label">Labels rejected</span>
         </div>
         <div class="stat-card added">
           <span class="stat-number">{{ gs.new_labels }}</span>
-          <span class="stat-label">New labels added</span>
+          <span class="stat-label">Labels added</span>
         </div>
         <div class="stat-card created">
           <span class="stat-number">{{ gs.created_labels }}</span>
           <span class="stat-label">Labels created</span>
+        </div>
+        <div class="stat-card confirm">
+          <span class="stat-number">{{ gs.teammate_reviews }}</span>
+          <span class="stat-label">Teammate reviews</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-number">{{ ((gs.stories_reviewed / gs.total_assigned * 100) | round(0) | int) if gs.total_assigned else 0 }}%</span>
+          <span class="stat-label">Completion</span>
         </div>
       </div>
     </section>

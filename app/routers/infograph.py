@@ -5,14 +5,14 @@ from itertools import combinations
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from app.auth import get_current_user
 from app.database import SessionLocal
-from app.models import LabelDecision, StoryLabel, TaxonomyLabel
+from app.models import AddedLabel, TaxonomyLabel, User
 
 router = APIRouter()
 
-# Brand-adjacent palette for taxonomy categories
 _PALETTE = [
     "#376782", "#85ab86", "#648a9e", "#a07060",
     "#6a8a6a", "#8a6a9e", "#9a8060", "#5a7090",
@@ -29,15 +29,14 @@ async def infograph(request: Request):
 
 
 @router.get("/infograph/data")
-async def infograph_data(request: Request, filter: str = "all"):
+async def infograph_data(request: Request, filter: str = "all", session_id: int | None = None):
     user = await get_current_user(request)
     if not user:
         return JSONResponse({"error": "unauthorized"}, status_code=401)
 
     async with SessionLocal() as db:
         # Taxonomy: build sublabel → (category, color) lookup
-        tax_result = await db.execute(select(TaxonomyLabel))
-        taxonomy = tax_result.scalars().all()
+        taxonomy = (await db.execute(select(TaxonomyLabel))).scalars().all()
 
         cat_color: dict[str, str] = {}
         sublabel_to_cat: dict[str, str] = {}
@@ -49,23 +48,31 @@ async def infograph_data(request: Request, filter: str = "all"):
             if t.sublabel:
                 sublabel_to_cat[t.sublabel.strip().lower()] = t.label
 
-        # Build story → {label_texts} mapping
+        # Collect all added labels with taxonomy info
+        added_filter = []
+        if session_id:
+            added_filter.append(AddedLabel.session_id == session_id)
+
+        added_rows = (await db.execute(
+            select(AddedLabel)
+            .where(*added_filter)
+            .options(selectinload(AddedLabel.taxonomy_label))
+        )).scalars().all()
+
+        # Build story → label text mapping
         story_labels: dict[int, set[str]] = defaultdict(set)
+        for al in added_rows:
+            if al.taxonomy_label and al.taxonomy_label.sublabel:
+                text = al.taxonomy_label.sublabel.strip()
+            elif al.taxonomy_label and al.taxonomy_label.label:
+                text = al.taxonomy_label.label.strip()
+            elif al.free_text:
+                text = al.free_text.strip()
+            else:
+                continue
+            story_labels[al.story_id].add(text)
 
-        if filter == "confirmed":
-            rows = (await db.execute(
-                select(StoryLabel, LabelDecision)
-                .join(LabelDecision, LabelDecision.story_label_id == StoryLabel.id)
-                .where(LabelDecision.decision == "confirm")
-            )).all()
-            for sl, _ld in rows:
-                story_labels[sl.story_id].add(sl.label_text.strip())
-        else:
-            all_sl = (await db.execute(select(StoryLabel))).scalars().all()
-            for sl in all_sl:
-                story_labels[sl.story_id].add(sl.label_text.strip())
-
-        # Count label frequencies and pairwise co-occurrences
+        # Frequency and co-occurrence
         freq: dict[str, int] = defaultdict(int)
         cooc: dict[tuple[str, str], int] = defaultdict(int)
 

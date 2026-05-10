@@ -1,251 +1,210 @@
 import io
-import re
 from collections import defaultdict
 from copy import copy
 from pathlib import Path
 
 import openpyxl
-from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+from openpyxl.styles import PatternFill, Font, Alignment
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse, RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 
 from app.auth import get_current_user
 from app.database import SessionLocal
-from app.models import AddedLabel, Group, LabelDecision, StoryLabel, TaxonomyLabel, User, UserStory
+from app.models import (
+    AddedLabel, Group, GroupAssignment,
+    MandatoryClassification, Session as ReviewSession,
+    StoryRejection, StoryRelevance, TaxonomyLabel, User, UserStory,
+)
 
 router = APIRouter()
 
 from app.config import find_latest_dataset
 DATASET_PATH = find_latest_dataset()
-LABELBOOK_PATH = Path("labelbook/Revised labelbook proposal for Oulu.xlsx")
+LABELBOOK_PATH = Path("labelbook/Labelbook 2026-05-05_used.xlsx")
 
-# ── Fill colours ──────────────────────────────────────────────────────────────
-FILL_YELLOW      = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
-FILL_GREEN       = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
-FILL_RED         = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
-FILL_LT_GREEN    = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
-FILL_LT_RED      = PatternFill(start_color="FCE4D6", end_color="FCE4D6", fill_type="solid")
-FILL_HDR         = PatternFill(start_color="70AD47", end_color="70AD47", fill_type="solid")
-FILL_HDR_NEW     = PatternFill(start_color="375623", end_color="375623", fill_type="solid")
-FILL_STAT_HDR    = PatternFill(start_color="2C324C", end_color="2C324C", fill_type="solid")
-FILL_CONFLICT    = PatternFill(start_color="FCE4D6", end_color="FCE4D6", fill_type="solid")
+FILL_YELLOW   = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
+FILL_GREEN    = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+FILL_RED      = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+FILL_LT_GREEN = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
+FILL_LT_RED   = PatternFill(start_color="FCE4D6", end_color="FCE4D6", fill_type="solid")
+FILL_HDR      = PatternFill(start_color="70AD47", end_color="70AD47", fill_type="solid")
+FILL_HDR_NEW  = PatternFill(start_color="375623", end_color="375623", fill_type="solid")
+FILL_STAT_HDR = PatternFill(start_color="2C324C", end_color="2C324C", fill_type="solid")
+FILL_ORANGE   = PatternFill(start_color="FCE4D6", end_color="FCE4D6", fill_type="solid")
 
-FONT_WHITE_BOLD  = Font(bold=True, color="FFFFFF")
+FONT_WHITE_BOLD = Font(bold=True, color="FFFFFF")
 
-
-def copy_cell_style(src, dst):
-    if src.has_style:
-        dst.font      = copy(src.font)
-        dst.alignment = copy(src.alignment)
-        dst.border    = copy(src.border)
+STORY_COLS = ["Story ID", "Workshop", "Submitted by", "Stakeholder Group",
+              "User type", "Task", "Goal", "Additional Notes"]
 
 
-def build_label_col_map(headers: list) -> dict[int, tuple[str, int]]:
-    """Map 1-based column index → (source, label_index) for Human/AI label columns."""
-    result = {}
-    for i, h in enumerate(headers):
-        if not h:
-            continue
-        m = re.match(r'^(Human|AI) label (\d+)$', str(h).strip(), re.IGNORECASE)
-        if m:
-            source = "Human" if m.group(1).lower() == "human" else "AI"
-            result[i + 1] = (source, int(m.group(2)))
-    return result
+def _story_row(story: UserStory) -> list:
+    return [
+        story.story_id,
+        story.workshop or "",
+        story.submitted_by or "",
+        story.stakeholder_group or "",
+        story.user_type or "",
+        story.task or "",
+        story.goal or "",
+        story.additional_notes or "",
+    ]
 
 
-# ── Overview sheet (Sheet 1) ──────────────────────────────────────────────────
-
-def build_overview_sheet(ws_src, all_story_decisions: dict, story_added: dict, wb_out):
-    """
-    Sheet 1: full dataset.
-    Row colours:
-      - light green  → reviewed by 2+ groups, all decisions agree
-      - light red    → reviewed by 2+ groups, at least one conflict
-      - yellow       → reviewed by exactly 1 group
-      - no fill      → not reviewed
-    """
-    ws = wb_out.create_sheet(title="Overview")
-    headers = [cell.value for cell in ws_src[1]]
-    label_col_map = build_label_col_map(headers)
-
-    max_added = max((len(v) for v in story_added.values()), default=0)
-
-    for col_idx, val in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=col_idx, value=val)
-        cell.font = Font(bold=True)
-        copy_cell_style(ws_src.cell(row=1, column=col_idx), cell)
-
-    for i in range(max_added):
-        cell = ws.cell(row=1, column=len(headers) + i + 1, value=f"Added label {i+1}")
-        cell.font = Font(bold=True, color="FFFFFF")
-        cell.fill = FILL_HDR
-
-    for src_row in ws_src.iter_rows(min_row=2):
-        story_id = str(src_row[0].value or "")
-        if not story_id:
-            continue
-        row_num = src_row[0].row
-
-        group_decisions = all_story_decisions.get(story_id, {})
-        n_groups = len(group_decisions)
-
-        if n_groups == 0:
-            row_fill = None
-        elif n_groups == 1:
-            row_fill = FILL_YELLOW
-        else:
-            conflict = False
-            all_keys = set()
-            for gd in group_decisions.values():
-                all_keys |= gd.keys()
-            for key in all_keys:
-                decisions_for_key = {gd[key] for gd in group_decisions.values() if key in gd}
-                if len(decisions_for_key) > 1:
-                    conflict = True
-                    break
-            row_fill = FILL_LT_RED if conflict else FILL_LT_GREEN
-
-        for src_cell in src_row:
-            dst = ws.cell(row=row_num, column=src_cell.column, value=src_cell.value)
-            copy_cell_style(src_cell, dst)
-            if row_fill:
-                dst.fill = row_fill
-
-        for i, lbl in enumerate(story_added.get(story_id, [])):
-            text = lbl["label"]
-            if lbl.get("sublabel"):
-                text += f" > {lbl['sublabel']}"
-            if lbl.get("note"):
-                text += f" ({lbl['note']})"
-            cell = ws.cell(row=row_num, column=len(headers) + i + 1, value=text)
-            cell.fill = FILL_GREEN
-
-    for col in ws.columns:
-        max_len = max((len(str(c.value or "")) for c in col), default=10)
-        ws.column_dimensions[col[0].column_letter].width = min(max_len + 2, 50)
-
-    return ws
-
-
-# ── Per-group sheet ───────────────────────────────────────────────────────────
-
-def build_group_sheet(ws_src, story_decisions: dict, story_added: dict, group_name: str, wb_out):
-    """One sheet per group with the original colour scheme."""
-    ws = wb_out.create_sheet(title=group_name)
-    headers = [cell.value for cell in ws_src[1]]
-    label_col_map = build_label_col_map(headers)
-    max_added = max((len(v) for v in story_added.values()), default=0)
-
-    for col_idx, val in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=col_idx, value=val)
-        cell.font = Font(bold=True)
-        copy_cell_style(ws_src.cell(row=1, column=col_idx), cell)
-
-    for i in range(max_added):
-        col_idx = len(headers) + i + 1
-        cell = ws.cell(row=1, column=col_idx, value=f"Added label {i+1}")
-        cell.font = Font(bold=True, color="FFFFFF")
-        cell.fill = FILL_HDR
-
-    for src_row in ws_src.iter_rows(min_row=2):
-        story_id = str(src_row[0].value or "")
-        if not story_id:
-            continue
-        row_num = src_row[0].row
-        decisions = story_decisions.get(story_id, {})
-        was_reviewed = bool(decisions)
-
-        for src_cell in src_row:
-            dst = ws.cell(row=row_num, column=src_cell.column, value=src_cell.value)
-            copy_cell_style(src_cell, dst)
-            col = src_cell.column
-            info = label_col_map.get(col)
-            if was_reviewed and not info:
-                dst.fill = FILL_YELLOW
-            elif info:
-                decision = decisions.get(info)
-                if decision == "confirm":
-                    dst.fill = FILL_GREEN
-                elif decision == "reject":
-                    dst.fill = FILL_RED
-                elif was_reviewed:
-                    dst.fill = FILL_YELLOW
-
-        added = story_added.get(story_id, [])
-        for i, lbl in enumerate(added):
-            text = lbl["label"]
-            if lbl.get("sublabel"):
-                text += f" > {lbl['sublabel']}"
-            if lbl.get("note"):
-                text += f" ({lbl['note']})"
-            cell = ws.cell(row=row_num, column=len(headers) + i + 1, value=text)
-            cell.fill = FILL_GREEN
-
-    for col in ws.columns:
-        max_len = max((len(str(c.value or "")) for c in col), default=10)
-        ws.column_dimensions[col[0].column_letter].width = min(max_len + 2, 50)
-
-    return ws
-
-
-# ── Statistics & conflicts sheet ──────────────────────────────────────────────
-
-def build_stats_sheet(wb_out, groups, group_stats, conflict_rows):
-    ws = wb_out.create_sheet(title="Statistics & Conflicts")
-
-    def hdr(row, col, val, fill=None):
-        cell = ws.cell(row=row, column=col, value=val)
-        cell.font = FONT_WHITE_BOLD
+def _write_header_row(ws, cols: list[str], fill=None):
+    for c, val in enumerate(cols, 1):
+        cell = ws.cell(row=1, column=c, value=val)
+        cell.font = FONT_WHITE_BOLD if fill else Font(bold=True)
         if fill:
             cell.fill = fill
-        return cell
 
-    # ── Summary block ──────────────────────────────────────────────────────
-    hdr(1, 1, "Group", FILL_STAT_HDR)
-    hdr(1, 2, "Assigned", FILL_STAT_HDR)
-    hdr(1, 3, "Reviewed", FILL_STAT_HDR)
-    hdr(1, 4, "Confirmed", FILL_STAT_HDR)
-    hdr(1, 5, "Rejected", FILL_STAT_HDR)
-    hdr(1, 6, "New labels", FILL_STAT_HDR)
 
-    for r, gs in enumerate(group_stats, start=2):
-        ws.cell(row=r, column=1, value=gs["group"].name)
-        ws.cell(row=r, column=2, value=gs["total_assigned"])
-        ws.cell(row=r, column=3, value=gs["stories_reviewed"])
-        ws.cell(row=r, column=4, value=gs["confirmed"]).fill = FILL_GREEN
-        ws.cell(row=r, column=5, value=gs["rejected"]).fill = FILL_RED
-        ws.cell(row=r, column=6, value=gs["new_labels"])
-
-    conflict_start = len(group_stats) + 4
-
-    # ── Conflicts block ────────────────────────────────────────────────────
-    ws.cell(row=conflict_start - 1, column=1, value="Conflicts — stories with differing group decisions").font = Font(bold=True, size=12)
-
-    col_headers = ["Story ID", "Label"] + [g.name for g in groups]
-    for c, val in enumerate(col_headers, 1):
-        hdr(conflict_start, c, val, FILL_STAT_HDR)
-
-    for r, row in enumerate(conflict_rows, start=conflict_start + 1):
-        ws.cell(row=r, column=1, value=row["story_id"])
-        ws.cell(row=r, column=2, value=row["label"])
-        for c, group in enumerate(groups, start=3):
-            dec = row["decisions"].get(group.name, "—")
-            cell = ws.cell(row=r, column=c, value=dec)
-            if dec == "confirm":
-                cell.fill = FILL_GREEN
-            elif dec == "reject":
-                cell.fill = FILL_RED
-
+def _autofit(ws, max_width=60):
     for col in ws.columns:
-        max_len = max((len(str(c.value or "")) for c in col), default=10)
-        ws.column_dimensions[col[0].column_letter].width = min(max_len + 2, 30)
+        w = max((len(str(c.value or "")) for c in col), default=8)
+        ws.column_dimensions[col[0].column_letter].width = min(w + 2, max_width)
 
+
+def build_partner_sheet(wb_out, group_name: str, stories: list[UserStory],
+                         added_map: dict, mandatory_map: dict,
+                         rejection_map: dict, relevance_map: dict,
+                         max_labels: int):
+    """One sheet per partner with story data + labelling results."""
+    safe_name = group_name[:31]  # Excel sheet name limit
+    ws = wb_out.create_sheet(title=safe_name)
+
+    extra_cols = ["Target user", "Concepts", "Rejected", "Rejection reason",
+                  "Relevance", "Relevance reason"]
+    label_cols = [f"Label {i+1}" for i in range(max_labels)]
+    all_cols = STORY_COLS + label_cols + extra_cols
+
+    _write_header_row(ws, all_cols, FILL_STAT_HDR)
+
+    # Colour the label header cells differently
+    for i in range(max_labels):
+        cell = ws.cell(row=1, column=len(STORY_COLS) + i + 1)
+        cell.fill = FILL_HDR
+
+    for row_idx, story in enumerate(stories, start=2):
+        sid = story.id
+        base = _story_row(story)
+
+        labels = added_map.get(sid, [])
+        label_vals = [
+            (lbl["label"] + (" › " + lbl["sublabel"] if lbl.get("sublabel") else "")
+             + (" (" + lbl["note"] + ")" if lbl.get("note") else ""))
+            for lbl in labels
+        ]
+        label_vals += [""] * (max_labels - len(label_vals))
+
+        mc = mandatory_map.get(sid)
+        rej = rejection_map.get(sid)
+        rel = relevance_map.get(sid)
+
+        extra = [
+            mc.target_user if mc and mc.target_user else "",
+            "; ".join(mc.concepts) if mc and mc.concepts else "",
+            "Yes" if rej and rej.rejected else "No",
+            rej.reason if rej and rej.reason else "",
+            rel.score if rel else "Normal",
+            rel.reason if rel and rel.reason else "",
+        ]
+
+        full_row = base + label_vals + extra
+        for c, val in enumerate(full_row, 1):
+            cell = ws.cell(row=row_idx, column=c, value=val)
+            col_idx = c
+            # Colour label cells green
+            if len(STORY_COLS) < col_idx <= len(STORY_COLS) + max_labels and val:
+                cell.fill = FILL_GREEN
+            # Colour rejected rows light red
+            if rej and rej.rejected:
+                if col_idx <= len(STORY_COLS):
+                    cell.fill = FILL_LT_RED
+
+    _autofit(ws)
     return ws
 
 
-# ── Main export endpoint ──────────────────────────────────────────────────────
+def build_summary_sheet(wb_out, groups: list, stories: list[UserStory],
+                         per_group_added: dict, per_group_mandatory: dict,
+                         per_group_rejection: dict, per_group_relevance: dict):
+    """
+    Summary sheet: each row = one story, columns = per-group label count,
+    rejection, relevance. Rows with 2+ groups sorted by partner count descending.
+    """
+    ws = wb_out.create_sheet(title="Summary")
+
+    group_names = [g.name for g in groups]
+    # Per-group columns: label count, rejected, relevance
+    extra_headers = []
+    for gn in group_names:
+        short = gn.split("–")[0].strip() if "–" in gn else gn[:20]
+        extra_headers += [f"{short} labels", f"{short} rejected", f"{short} relevance"]
+
+    all_cols = STORY_COLS + extra_headers + ["Groups reviewed", "Has conflict"]
+    _write_header_row(ws, all_cols, FILL_STAT_HDR)
+
+    # Build rows
+    row_data = []
+    for story in stories:
+        sid = story.id
+        groups_reviewed = 0
+        extra_vals = []
+        group_labels: dict[str, list] = {}
+
+        for group in groups:
+            gid = group.id
+            added = per_group_added.get(gid, {}).get(sid, [])
+            rej = per_group_rejection.get(gid, {}).get(sid)
+            rel = per_group_relevance.get(gid, {}).get(sid)
+
+            n_labels = len(added)
+            if n_labels > 0 or rej is not None or rel is not None:
+                groups_reviewed += 1
+
+            group_labels[group.name] = [lbl["label"] + ("/" + lbl["sublabel"] if lbl.get("sublabel") else "")
+                                         for lbl in added]
+
+            extra_vals.append(n_labels if n_labels else "")
+            extra_vals.append("Yes" if rej and rej.rejected else ("" if rej is None else "No"))
+            extra_vals.append(rel.score if rel else "")
+
+        # Detect conflict: same story, different labels across groups
+        all_labels_sets = [set(lbls) for lbls in group_labels.values() if lbls]
+        has_conflict = False
+        if len(all_labels_sets) >= 2:
+            union = set.union(*all_labels_sets)
+            intersect = set.intersection(*all_labels_sets)
+            has_conflict = len(union) > len(intersect)
+
+        row_data.append({
+            "story": story,
+            "groups_reviewed": groups_reviewed,
+            "has_conflict": has_conflict,
+            "extra_vals": extra_vals,
+        })
+
+    # Sort: multi-group stories first, then by groups_reviewed desc
+    row_data.sort(key=lambda r: (-r["groups_reviewed"], r["story"].story_id))
+
+    for row_idx, rd in enumerate(row_data, start=2):
+        story = rd["story"]
+        full_row = _story_row(story) + rd["extra_vals"] + [rd["groups_reviewed"], "Yes" if rd["has_conflict"] else ""]
+        for c, val in enumerate(full_row, 1):
+            cell = ws.cell(row=row_idx, column=c, value=val)
+            # Conflict rows: light orange
+            if rd["has_conflict"] and rd["groups_reviewed"] >= 2 and c <= len(STORY_COLS):
+                cell.fill = FILL_ORANGE
+            # Multi-group non-conflict: light green
+            elif not rd["has_conflict"] and rd["groups_reviewed"] >= 2 and c <= len(STORY_COLS):
+                cell.fill = FILL_LT_GREEN
+
+    _autofit(ws)
+    return ws
+
 
 @router.get("/export")
 async def export_all(request: Request, session_id: int | None = None):
@@ -258,149 +217,130 @@ async def export_all(request: Request, session_id: int | None = None):
         if not user.is_admin:
             groups = [g for g in groups if g.id == user.group_id]
 
-        wb_src = openpyxl.load_workbook(DATASET_PATH)
-        ws_src = wb_src.active
+        # Resolve session
+        if session_id:
+            rev_session = await db.get(ReviewSession, session_id)
+        else:
+            result = await db.execute(
+                select(ReviewSession).order_by(ReviewSession.started_at.desc())
+            )
+            rev_session = result.scalars().first()
+
+        # Load all stories
+        all_stories = (await db.execute(
+            select(UserStory).order_by(UserStory.story_id)
+        )).scalars().all()
+        story_by_id = {s.id: s for s in all_stories}
+
+        # Per-group data maps: group_id → {story_id → data}
+        per_group_added:     dict[int, dict[int, list]] = {}
+        per_group_mandatory: dict[int, dict[int, MandatoryClassification]] = {}
+        per_group_rejection: dict[int, dict[int, StoryRejection]] = {}
+        per_group_relevance: dict[int, dict[int, StoryRelevance]] = {}
+
+        for group in groups:
+            gid = group.id
+            added_filter = [User.group_id == gid]
+            if rev_session:
+                added_filter.append(AddedLabel.session_id == rev_session.id)
+
+            added_result = await db.execute(
+                select(AddedLabel)
+                .join(User, AddedLabel.user_id == User.id)
+                .where(*added_filter)
+                .options(selectinload(AddedLabel.taxonomy_label))
+            )
+            added_labels = added_result.scalars().all()
+            added_map: dict[int, list] = {}
+            for al in added_labels:
+                entry = {
+                    "label":    al.taxonomy_label.label    if al.taxonomy_label else (al.free_text or ""),
+                    "sublabel": al.taxonomy_label.sublabel if al.taxonomy_label else "",
+                    "note":     al.note or "",
+                }
+                added_map.setdefault(al.story_id, []).append(entry)
+            per_group_added[gid] = added_map
+
+            mc_filter = [MandatoryClassification.group_id == gid]
+            if rev_session:
+                mc_filter.append(MandatoryClassification.session_id == rev_session.id)
+            mc_rows = (await db.execute(select(MandatoryClassification).where(*mc_filter))).scalars().all()
+            per_group_mandatory[gid] = {mc.story_id: mc for mc in mc_rows}
+
+            rej_filter = [StoryRejection.group_id == gid]
+            if rev_session:
+                rej_filter.append(StoryRejection.session_id == rev_session.id)
+            rej_rows = (await db.execute(select(StoryRejection).where(*rej_filter))).scalars().all()
+            per_group_rejection[gid] = {r.story_id: r for r in rej_rows}
+
+            rel_filter = [StoryRelevance.group_id == gid]
+            if rev_session:
+                rel_filter.append(StoryRelevance.session_id == rev_session.id)
+            rel_rows = (await db.execute(select(StoryRelevance).where(*rel_filter))).scalars().all()
+            per_group_relevance[gid] = {r.story_id: r for r in rel_rows}
+
+        # Global max labels (for column alignment)
+        max_labels_global = max(
+            (len(lbls) for gid in per_group_added for sid, lbls in per_group_added[gid].items()),
+            default=0,
+        )
+        max_labels_global = max(max_labels_global, 1)
+
         wb_out = openpyxl.Workbook()
         wb_out.remove(wb_out.active)
 
-        # Collect per-group decision and added-label maps
-        group_story_decisions: dict[int, dict[str, dict]] = {}   # group_id → story_id → {(src,idx): decision}
-        group_story_added:     dict[int, dict[str, list]] = {}   # group_id → story_id → [entries]
-        group_stats_list = []
-
+        # Per-partner sheets
         for group in groups:
-            dec_where = [User.group_id == group.id]
-            if session_id:
-                dec_where.append(LabelDecision.session_id == session_id)
+            gid = group.id
 
-            dec_result = await db.execute(
-                select(LabelDecision, StoryLabel, UserStory)
-                .join(StoryLabel, StoryLabel.id == LabelDecision.story_label_id)
-                .join(UserStory, UserStory.id == LabelDecision.story_id)
-                .join(User, User.id == LabelDecision.user_id)
-                .where(*dec_where)
+            # Stories assigned to this group (or all if no session assignments)
+            assigned_result = await db.execute(
+                select(GroupAssignment.story_id)
+                .where(GroupAssignment.group_id == gid)
+                .order_by(GroupAssignment.position)
+            )
+            assigned_ids = [r for r, in assigned_result.all()]
+            if assigned_ids:
+                partner_stories = [story_by_id[sid] for sid in assigned_ids if sid in story_by_id]
+            else:
+                partner_stories = all_stories
+
+            max_labels_group = max(
+                (len(lbls) for sid, lbls in per_group_added[gid].items()),
+                default=1,
             )
 
-            raw: dict[str, dict[tuple, list[str]]] = {}
-            for dec, lbl, story in dec_result.all():
-                key = (lbl.source, lbl.label_index)
-                raw.setdefault(story.story_id, {}).setdefault(key, []).append(dec.decision)
-
-            story_decisions: dict[str, dict[tuple, str]] = {}
-            for sid, label_map in raw.items():
-                story_decisions[sid] = {}
-                for key, votes in label_map.items():
-                    if "reject" in votes:
-                        story_decisions[sid][key] = "reject"
-                    elif all(v == "confirm" for v in votes):
-                        story_decisions[sid][key] = "confirm"
-                    else:
-                        story_decisions[sid][key] = "abstain"
-
-            added_where = [User.group_id == group.id]
-            if session_id:
-                added_where.append(AddedLabel.session_id == session_id)
-
-            added_result = await db.execute(
-                select(AddedLabel, UserStory)
-                .join(UserStory, UserStory.id == AddedLabel.story_id)
-                .join(User, User.id == AddedLabel.user_id)
-                .outerjoin(TaxonomyLabel, TaxonomyLabel.id == AddedLabel.taxonomy_label_id)
-                .where(*added_where)
-                .options(selectinload(AddedLabel.taxonomy_label))
-            )
-            story_added: dict[str, list] = {}
-            for added, story in added_result.all():
-                entry = {
-                    "label":    added.taxonomy_label.label    if added.taxonomy_label else (added.free_text or ""),
-                    "sublabel": added.taxonomy_label.sublabel if added.taxonomy_label else "",
-                    "note":     added.note or "",
-                }
-                story_added.setdefault(story.story_id, []).append(entry)
-
-            group_story_decisions[group.id] = story_decisions
-            group_story_added[group.id]     = story_added
-
-            # Collect stats
-            from sqlalchemy import func, and_
-            from app.models import GroupAssignment
-            total_assigned = (await db.execute(
-                select(func.count(GroupAssignment.id)).where(GroupAssignment.group_id == group.id)
-            )).scalar()
-            group_stats_list.append({
-                "group": group,
-                "total_assigned": total_assigned,
-                "stories_reviewed": len(story_decisions),
-                "confirmed": sum(1 for sd in story_decisions.values() for d in sd.values() if d == "confirm"),
-                "rejected":  sum(1 for sd in story_decisions.values() for d in sd.values() if d == "reject"),
-                "new_labels": sum(len(v) for v in story_added.values()),
-            })
-
-        # Build combined story decisions {story_id: {group_id: {key: decision}}}
-        all_story_decisions: dict[str, dict] = {}
-        for group in groups:
-            for story_id, sd in group_story_decisions[group.id].items():
-                all_story_decisions.setdefault(story_id, {})[group.id] = sd
-
-        # Merge added labels across all groups (deduplicate by label text)
-        all_story_added: dict[str, list] = {}
-        for gid, sadded in group_story_added.items():
-            for story_id, entries in sadded.items():
-                seen = {e["label"] + (e.get("sublabel") or "") for e in all_story_added.get(story_id, [])}
-                for entry in entries:
-                    key = entry["label"] + (entry.get("sublabel") or "")
-                    if key not in seen:
-                        all_story_added.setdefault(story_id, []).append(entry)
-                        seen.add(key)
-
-        # Build conflict rows for stats sheet
-        conflict_rows = []
-        for story_id, gd in all_story_decisions.items():
-            if len(gd) < 2:
-                continue
-            all_keys = set()
-            for d in gd.values():
-                all_keys |= d.keys()
-            for key in all_keys:
-                group_decisions = {g.name: gd[g.id][key] for g in groups if g.id in gd and key in gd[g.id]}
-                unique_decisions = set(group_decisions.values())
-                if len(unique_decisions) > 1:
-                    label_text = f"{key[0]} label {key[1]}"
-                    conflict_rows.append({
-                        "story_id": story_id,
-                        "label": label_text,
-                        "decisions": group_decisions,
-                    })
-        conflict_rows.sort(key=lambda r: r["story_id"])
-
-        # Sheet 1: Overview
-        build_overview_sheet(ws_src, all_story_decisions, all_story_added, wb_out)
-
-        # Per-group sheets
-        for group in groups:
-            build_group_sheet(
-                ws_src,
-                group_story_decisions[group.id],
-                group_story_added[group.id],
-                group.name,
+            build_partner_sheet(
                 wb_out,
+                group.name,
+                partner_stories,
+                per_group_added[gid],
+                per_group_mandatory[gid],
+                per_group_rejection[gid],
+                per_group_relevance[gid],
+                max_labels_group,
             )
 
-        # Final: Statistics & Conflicts
-        build_stats_sheet(wb_out, groups, group_stats_list, conflict_rows)
+        # Summary sheet (all stories, all groups)
+        build_summary_sheet(
+            wb_out,
+            groups,
+            all_stories,
+            per_group_added,
+            per_group_mandatory,
+            per_group_rejection,
+            per_group_relevance,
+        )
 
     buf = io.BytesIO()
     wb_out.save(buf)
     buf.seek(0)
-    filename = "label_validation_results.xlsx"
     return StreamingResponse(
         buf,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f"attachment; filename={filename}"},
+        headers={"Content-Disposition": "attachment; filename=label_results.xlsx"},
     )
 
-
-# ── Revised labelbook export ──────────────────────────────────────────────────
 
 @router.get("/export/labelbook")
 async def export_labelbook(request: Request):
@@ -419,7 +359,6 @@ async def export_labelbook(request: Request):
     ws = wb.active
 
     if new_labels:
-        # Find the last used row and append new labels with a green section
         last_row = ws.max_row + 2
         header_cell = ws.cell(row=last_row, column=3, value="NEW LABELS (added during sessions)")
         header_cell.font = FONT_WHITE_BOLD

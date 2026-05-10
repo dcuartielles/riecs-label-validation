@@ -1,6 +1,7 @@
+import json
 from datetime import datetime
 from sqlalchemy import (
-    Integer, String, Boolean, DateTime, ForeignKey, Text, UniqueConstraint
+    Integer, String, Boolean, DateTime, ForeignKey, Text, UniqueConstraint, Float
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
@@ -27,7 +28,6 @@ class User(Base):
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
 
     group: Mapped["Group | None"] = relationship(back_populates="users")
-    decisions: Mapped[list["LabelDecision"]] = relationship(back_populates="user")
     added_labels: Mapped[list["AddedLabel"]] = relationship(back_populates="user")
 
 
@@ -46,27 +46,24 @@ class UserStory(Base):
 
     labels: Mapped[list["StoryLabel"]] = relationship(back_populates="story")
     assignments: Mapped[list["GroupAssignment"]] = relationship(back_populates="story")
-    decisions: Mapped[list["LabelDecision"]] = relationship(back_populates="story")
     added_labels: Mapped[list["AddedLabel"]] = relationship(back_populates="story")
 
 
 class StoryLabel(Base):
-    """A label that was applied to a user story (from the spreadsheet)."""
+    """Imported AI/Human labels — kept for reference, not used in v007 review flow."""
     __tablename__ = "story_labels"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     story_id: Mapped[int] = mapped_column(ForeignKey("user_stories.id"))
-    source: Mapped[str] = mapped_column(String(10))   # 'AI' or 'Human'
+    source: Mapped[str] = mapped_column(String(10))
     label_text: Mapped[str] = mapped_column(Text, nullable=False)
-    label_index: Mapped[int] = mapped_column(Integer)  # 1-5
-    label_status: Mapped[str | None] = mapped_column(String(20))  # Human labels only
+    label_index: Mapped[int] = mapped_column(Integer)
+    label_status: Mapped[str | None] = mapped_column(String(20))
 
     story: Mapped["UserStory"] = relationship(back_populates="labels")
-    decisions: Mapped[list["LabelDecision"]] = relationship(back_populates="story_label")
 
 
 class TaxonomyLabel(Base):
-    """Label taxonomy loaded from the labelbook spreadsheet."""
     __tablename__ = "taxonomy_labels"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -80,7 +77,6 @@ class TaxonomyLabel(Base):
 
 
 class GroupAssignment(Base):
-    """Which user stories each group is assigned to review."""
     __tablename__ = "group_assignments"
     __table_args__ = (UniqueConstraint("group_id", "story_id"),)
 
@@ -94,40 +90,24 @@ class GroupAssignment(Base):
 
 
 class Session(Base):
-    """A global review session started and stopped by an admin."""
     __tablename__ = "sessions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     started_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime)
+    overlap_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    stories_per_group: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    chart_refresh_secs: Mapped[int] = mapped_column(Integer, default=300)
 
     started_by_user: Mapped["User | None"] = relationship(foreign_keys=[started_by])
-    decisions: Mapped[list["LabelDecision"]] = relationship(back_populates="session")
     added_labels: Mapped[list["AddedLabel"]] = relationship(back_populates="session")
-
-
-class LabelDecision(Base):
-    """A researcher's decision on an existing label."""
-    __tablename__ = "label_decisions"
-    __table_args__ = (UniqueConstraint("session_id", "user_id", "story_label_id"),)
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    session_id: Mapped[int] = mapped_column(ForeignKey("sessions.id"))
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    story_id: Mapped[int] = mapped_column(ForeignKey("user_stories.id"))
-    story_label_id: Mapped[int] = mapped_column(ForeignKey("story_labels.id"))
-    decision: Mapped[str] = mapped_column(String(10))  # 'confirm', 'reject', 'abstain'
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-
-    session: Mapped["Session"] = relationship(back_populates="decisions")
-    user: Mapped["User"] = relationship(back_populates="decisions")
-    story: Mapped["UserStory"] = relationship(back_populates="decisions")
-    story_label: Mapped["StoryLabel"] = relationship(back_populates="decisions")
+    mandatory_classifications: Mapped[list["MandatoryClassification"]] = relationship(back_populates="session")
+    story_rejections: Mapped[list["StoryRejection"]] = relationship(back_populates="session")
+    story_relevances: Mapped[list["StoryRelevance"]] = relationship(back_populates="session")
 
 
 class AddedLabel(Base):
-    """A new label added by researchers during review."""
     __tablename__ = "added_labels"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -143,3 +123,80 @@ class AddedLabel(Base):
     user: Mapped["User"] = relationship(back_populates="added_labels")
     story: Mapped["UserStory"] = relationship(back_populates="added_labels")
     taxonomy_label: Mapped["TaxonomyLabel | None"] = relationship(back_populates="added_labels")
+    decisions: Mapped[list["AddedLabelDecision"]] = relationship(back_populates="added_label")
+
+
+class AddedLabelDecision(Base):
+    """Confirm or reject a label added by a teammate (same group, same session)."""
+    __tablename__ = "added_label_decisions"
+    __table_args__ = (UniqueConstraint("session_id", "user_id", "added_label_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("sessions.id"))
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    added_label_id: Mapped[int] = mapped_column(ForeignKey("added_labels.id"))
+    decision: Mapped[str] = mapped_column(String(10))  # 'confirm' or 'reject'
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    added_label: Mapped["AddedLabel"] = relationship(back_populates="decisions")
+
+
+class MandatoryClassification(Base):
+    """Per-institution mandatory classification: target user (one) + concepts (many)."""
+    __tablename__ = "mandatory_classifications"
+    __table_args__ = (UniqueConstraint("session_id", "group_id", "story_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("sessions.id"))
+    group_id: Mapped[int] = mapped_column(ForeignKey("groups.id"))
+    story_id: Mapped[int] = mapped_column(ForeignKey("user_stories.id"))
+    target_user: Mapped[str | None] = mapped_column(Text)
+    concepts_json: Mapped[str | None] = mapped_column(Text)  # JSON list of strings
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    session: Mapped["Session"] = relationship(back_populates="mandatory_classifications")
+
+    @property
+    def concepts(self) -> list[str]:
+        if not self.concepts_json:
+            return []
+        return json.loads(self.concepts_json)
+
+    @concepts.setter
+    def concepts(self, value: list[str]):
+        self.concepts_json = json.dumps(value)
+
+
+class StoryRejection(Base):
+    """Per-institution flag to mark a story as out of scope."""
+    __tablename__ = "story_rejections"
+    __table_args__ = (UniqueConstraint("session_id", "group_id", "story_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("sessions.id"))
+    group_id: Mapped[int] = mapped_column(ForeignKey("groups.id"))
+    story_id: Mapped[int] = mapped_column(ForeignKey("user_stories.id"))
+    rejected: Mapped[bool] = mapped_column(Boolean, default=True)
+    reason: Mapped[str | None] = mapped_column(Text)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    session: Mapped["Session"] = relationship(back_populates="story_rejections")
+
+
+class StoryRelevance(Base):
+    """Per-institution relevance rating for a story."""
+    __tablename__ = "story_relevances"
+    __table_args__ = (UniqueConstraint("session_id", "group_id", "story_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("sessions.id"))
+    group_id: Mapped[int] = mapped_column(ForeignKey("groups.id"))
+    story_id: Mapped[int] = mapped_column(ForeignKey("user_stories.id"))
+    score: Mapped[str] = mapped_column(String(20), default="Normal")  # Normal, High, VeryHigh
+    reason: Mapped[str | None] = mapped_column(Text)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    session: Mapped["Session"] = relationship(back_populates="story_relevances")

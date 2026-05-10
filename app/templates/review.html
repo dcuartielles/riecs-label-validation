@@ -1,253 +1,376 @@
 {% extends "base.html" %}
 {% block title %}Review · Story {{ pos + 1 }} of {{ total }}{% endblock %}
 {% block content %}
+<style>
+main { max-width: 1160px; }
+</style>
 
-<div class="review-layout">
+<!-- Progress bar -->
+<div class="progress-bar-wrap" style="margin-bottom:1rem">
+  <div class="progress-bar" style="width: {{ ((pos + 1) / total * 100) | round(1) }}%"></div>
+  <span class="progress-label">{{ pos + 1 }} / {{ total }}</span>
+</div>
 
-  <!-- Progress bar -->
-  <div class="progress-bar-wrap">
-    <div class="progress-bar" style="width: {{ ((pos + 1) / total * 100) | round(1) }}%"></div>
-    <span class="progress-label">{{ pos + 1 }} / {{ total }}</span>
-  </div>
+<div class="review-columns">
 
-  <!-- Story card -->
-  <div class="story-card">
-    <div class="story-meta">
-      <span class="story-id">{{ story.story_id }}</span>
-      {% if story.user_type %}<span class="badge">{{ story.user_type }}</span>{% endif %}
-      {% if story.stakeholder_group %}<span class="badge muted">{{ story.stakeholder_group }}</span>{% endif %}
+  <!-- ── LEFT: Story content ── -->
+  <div class="review-left">
+
+    <div class="story-card">
+      <div class="story-meta">
+        <span class="story-id">{{ story.story_id }}</span>
+        {% if story.user_type %}<span class="badge">{{ story.user_type }}</span>{% endif %}
+        {% if story.stakeholder_group %}<span class="badge muted">{{ story.stakeholder_group }}</span>{% endif %}
+        {% if story.workshop %}<span class="badge muted">{{ story.workshop }}</span>{% endif %}
+      </div>
+
+      {% if story.submitted_by %}
+      <div class="story-field">
+        <label>Submitted by</label>
+        <p>{{ story.submitted_by }}</p>
+      </div>
+      {% endif %}
+
+      {% if story.task %}
+      <div class="story-field">
+        <label>Task</label>
+        <p>{{ story.task }}</p>
+      </div>
+      {% endif %}
+
+      {% if story.goal %}
+      <div class="story-field">
+        <label>Goal</label>
+        <p>{{ story.goal }}</p>
+      </div>
+      {% endif %}
+
+      {% if story.additional_notes %}
+      <div class="story-field">
+        <label>Notes</label>
+        <p>{{ story.additional_notes }}</p>
+      </div>
+      {% endif %}
     </div>
 
-    {% if story.task %}
-    <div class="story-field">
-      <label>Task</label>
-      <p>{{ story.task }}</p>
-    </div>
-    {% endif %}
-
-    {% if story.goal %}
-    <div class="story-field">
-      <label>Goal</label>
-      <p>{{ story.goal }}</p>
-    </div>
-    {% endif %}
-
-    {% if story.additional_notes %}
-    <div class="story-field">
-      <label>Notes</label>
-      <p>{{ story.additional_notes }}</p>
-    </div>
-    {% endif %}
-  </div>
-
-  <!-- Existing labels -->
-  <div class="labels-section">
-    {% set status_tooltips = {
-      "Non-canonical": "Label(s) come from a different taxonomy; no direct equivalent exists in the labelbook.",
-      "Fragmented":    "Label cell appears split or corrupted (e.g. a multi-label string broken across columns).",
-      "Near-miss":     "Label is recognisably close to a labelbook entry and can be mapped with confidence.",
-      "Exact match":   "All human labels are found verbatim in the labelbook."
-    } %}
-    <h2>Existing labels — confirm or reject each one</h2>
-
-    {% if labels %}
+    <!-- Teammate labels -->
+    {% if teammate_labels %}
+    <div class="teammate-section">
+      <h2>Labels from teammates — confirm or reject</h2>
       <div class="label-list">
-        {% for lbl in labels %}
-        <div class="label-row {% if decisions.get(lbl.id) %}decided-{{ decisions[lbl.id] }}{% endif %}">
+        {% for lbl in teammate_labels %}
+        <div class="label-row {% if my_decisions.get(lbl.id) == 'confirm' %}decided-confirm{% elif my_decisions.get(lbl.id) == 'reject' %}decided-reject{% endif %}">
           <div class="label-info">
-            <span class="source-badge source-{{ lbl.source | lower }}">{{ lbl.source }}</span>
-            {% if lbl.source == 'Human' and lbl.label_status %}
-              {% set sc = lbl.label_status | lower | replace(" ", "-") %}
-              <span class="status-pill status-{{ sc }}"
-                    data-tooltip="{{ status_tooltips.get(lbl.label_status, '') }}">{{ lbl.label_status }}</span>
+            {% if lbl.taxonomy_label %}
+              <span class="label-text">
+                <strong>{{ lbl.taxonomy_label.label }}</strong>
+                {% if lbl.taxonomy_label.sublabel %} › {{ lbl.taxonomy_label.sublabel }}{% endif %}
+              </span>
+              {% if lbl.taxonomy_label.is_user_created %}
+                <span class="badge" style="font-size:0.65rem">new</span>
+              {% endif %}
+            {% elif lbl.free_text %}
+              <span class="label-text">{{ lbl.free_text }}</span>
             {% endif %}
-            {% set desc = label_descriptions.get(lbl.id) %}
-            <span class="label-text{% if desc %} has-tooltip{% endif %}"
-                  {% if desc %}data-tooltip="{{ desc }}"{% endif %}>{{ lbl.label_text }}</span>
+            {% if lbl.note %}<em class="muted" style="font-size:0.85rem"> — {{ lbl.note }}</em>{% endif %}
           </div>
           <div class="label-actions">
-            <form method="post" action="/review/decide">
-              <input type="hidden" name="story_id" value="{{ story.id }}">
-              <input type="hidden" name="story_label_id" value="{{ lbl.id }}">
+            <form method="post" action="/review/decide-added-label">
+              <input type="hidden" name="added_label_id" value="{{ lbl.id }}">
               <input type="hidden" name="pos" value="{{ pos }}">
               <button type="submit" name="decision" value="confirm" title="Confirm"
-                class="btn btn-decision btn-confirm {% if decisions.get(lbl.id) == 'confirm' %}active{% endif %}">&#10003;</button>
+                class="btn btn-decision btn-confirm {% if my_decisions.get(lbl.id) == 'confirm' %}active{% endif %}">&#10003;</button>
               <button type="submit" name="decision" value="reject" title="Reject"
-                class="btn btn-decision btn-reject {% if decisions.get(lbl.id) == 'reject' %}active{% endif %}">&#10007;</button>
-              <button type="submit" name="decision" value="abstain" title="Abstain"
-                class="btn btn-decision btn-abstain {% if decisions.get(lbl.id) == 'abstain' %}active{% endif %}">&#9711;</button>
+                class="btn btn-decision btn-reject {% if my_decisions.get(lbl.id) == 'reject' %}active{% endif %}">&#10007;</button>
             </form>
           </div>
         </div>
         {% endfor %}
       </div>
-    {% else %}
-      <p class="muted">No existing labels for this story.</p>
+    </div>
     {% endif %}
-  </div>
 
-  <!-- Add a label -->
-  <div class="add-label-section">
-    <h2>Add a label from the taxonomy</h2>
+    <!-- Create new taxonomy label -->
+    <div class="add-label-section">
+      <h2>Create a new taxonomy label</h2>
+      <p class="muted" style="font-size:0.85rem;margin-bottom:1rem">
+        Use this only if the label you need does not exist in the taxonomy above.
+        Check the term against the
+        <a href="https://eurovoc.europa.eu" target="_blank">EuroVoc EU terminology database</a>
+        before saving.
+      </p>
 
-    <form method="post" action="/review/add-label" class="add-label-form">
-      <input type="hidden" name="story_id" value="{{ story.id }}">
-      <input type="hidden" name="pos" value="{{ pos }}">
-
-      <script id="tax-data" type="application/json">{{ tax_json | safe }}</script>
-
-      <div class="form-row" style="margin-bottom:0.5rem">
-        <select name="taxonomy_label_id" id="taxonomy-select">
-          <option value="">— select a label —</option>
-          {% for top_label, sublabels in tax_tree.items() %}
-            <optgroup label="{{ top_label }}">
-              {% for t in sublabels %}
-                <option value="{{ t.id }}">{{ t.sublabel }}</option>
-              {% endfor %}
-            </optgroup>
+      <div style="margin-bottom:0.6rem">
+        <select id="category-select" onchange="onCategoryChange()" style="width:100%">
+          <option value="">— select a top-level category —</option>
+          {% for cat in tax_categories %}
+            <option value="{{ cat }}">{{ cat }}</option>
           {% endfor %}
+          <option value="__other__">Other (create new category)</option>
         </select>
-
-        <input type="text" id="label-search" placeholder="Find existing label"
-               class="note-input" list="sublabel-datalist" autocomplete="off"
-               oninput="onLabelSearch(this.value)"
-               onchange="syncDropdownFromSearch(this.value)">
-        <datalist id="sublabel-datalist"></datalist>
       </div>
 
-      <div class="form-row">
-        <input type="text" name="note" placeholder="Optional note" class="note-input">
-        <button type="submit" class="btn btn-add">Add label</button>
+      <div id="other-category-row" style="display:none;margin-bottom:0.6rem">
+        <div style="display:flex;gap:0.6rem;flex-wrap:wrap;align-items:center">
+          <input id="other-category-input" type="text" placeholder="New category name"
+                 class="note-input" style="flex:1" oninput="onOtherCategoryInput()">
+          <button type="button" class="btn btn-nav" onclick="checkCategory()">Check EU terms</button>
+        </div>
+        <div id="category-eurovoc-result" style="margin-top:0.5rem"></div>
       </div>
 
-      <div id="label-description" class="label-description" style="display:none"></div>
-    </form>
+      <div style="display:flex;gap:0.6rem;margin-bottom:0.6rem;flex-wrap:wrap;align-items:center">
+        <input id="new-sublabel" type="text" placeholder="New label name"
+               class="note-input" style="flex:1" oninput="onSublabelInput()">
+        <button type="button" class="btn btn-nav" onclick="checkSublabel()">Check EU terms</button>
+      </div>
 
-    {% if added %}
-    <div class="added-labels">
-      <h3>Labels added this session</h3>
-      {% for a in added %}
-      <div class="added-label-row">
-        <span>
-          {% if a.taxonomy_label %}
+      <div id="eurovoc-result" style="display:none;margin-bottom:0.75rem"></div>
+
+      <form method="post" action="/review/create-taxonomy-label" id="create-label-form">
+        <input type="hidden" name="story_id" value="{{ story.id }}">
+        <input type="hidden" name="pos" value="{{ pos }}">
+        <input type="hidden" name="top_label" id="hidden-toplabel">
+        <input type="hidden" name="sublabel" id="hidden-sublabel">
+        <input type="hidden" name="description" id="hidden-description">
+        <div style="margin-bottom:0.6rem">
+          <input type="text" id="new-description" placeholder="Definition (optional)"
+                 class="note-input" style="width:100%">
+        </div>
+        <div style="display:flex;gap:0.6rem;flex-wrap:wrap">
+          <input type="text" name="note" placeholder="Optional note" class="note-input" style="flex:1">
+          <button type="submit" id="create-btn" class="btn btn-add"
+                  style="opacity:0.35;pointer-events:none" disabled
+                  onclick="return prepareCreate()">Create &amp; add to story</button>
+        </div>
+      </form>
+    </div>
+
+  </div><!-- /review-left -->
+
+  <!-- ── RIGHT: Operations sidebar (sticky) ── -->
+  <div class="review-right">
+
+    <!-- Mandatory: Target user in story -->
+    <div class="mandatory-section {% if mandatory and mandatory.target_user %}filled{% endif %}">
+      <h3>Target user in story <span class="required-badge">{% if mandatory and mandatory.target_user %}✓ saved{% else %}required{% endif %}</span></h3>
+      <form method="post" action="/review/mandatory">
+        <input type="hidden" name="story_id" value="{{ story.id }}">
+        <input type="hidden" name="pos" value="{{ pos }}">
+        <div class="radio-group">
+          {% for opt in target_user_sublabels %}
+          <label>
+            <input type="radio" name="target_user" value="{{ opt }}"
+              {% if mandatory and mandatory.target_user == opt %}checked{% endif %}>
+            {{ opt }}
+          </label>
+          {% endfor %}
+        </div>
+        <button type="submit" class="btn btn-add" style="width:100%">Save target user</button>
+      </form>
+    </div>
+
+    <!-- Mandatory: User story concepts -->
+    <div class="mandatory-section {% if mandatory and mandatory.concepts %}filled{% endif %}">
+      <h3>User story concepts <span class="required-badge">{% if mandatory and mandatory.concepts %}✓ saved{% else %}required{% endif %}</span></h3>
+      <form method="post" action="/review/mandatory-concepts">
+        <input type="hidden" name="story_id" value="{{ story.id }}">
+        <input type="hidden" name="pos" value="{{ pos }}">
+        <div class="checkbox-group">
+          {% for opt in concept_sublabels %}
+          <label>
+            <input type="checkbox" name="concepts" value="{{ opt }}"
+              {% if mandatory and opt in mandatory.concepts %}checked{% endif %}>
+            {{ opt }}
+          </label>
+          {% endfor %}
+        </div>
+        <button type="submit" class="btn btn-add" style="width:100%">Save concepts</button>
+      </form>
+    </div>
+
+    <!-- Story assessment -->
+    <div class="ops-card">
+      <h3>Story assessment</h3>
+
+      <!-- Rejection -->
+      <form method="post" action="/review/rejection" style="margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid var(--border)">
+        <input type="hidden" name="story_id" value="{{ story.id }}">
+        <input type="hidden" name="pos" value="{{ pos }}">
+        <div class="rejection-toggle">
+          <input type="checkbox" name="rejected" id="rejected-toggle"
+            {% if rejection and rejection.rejected %}checked{% endif %}
+            onchange="toggleRejectionReason(this.checked)">
+          <label for="rejected-toggle" style="cursor:pointer;font-size:0.9rem;font-weight:600;color:#c0392b">
+            Mark as out of scope
+          </label>
+        </div>
+        <div id="rejection-reason" style="{% if rejection and rejection.rejected %}display:block{% else %}display:none{% endif %}">
+          <textarea name="reason" placeholder="Reason (optional)"
+            class="note-input" style="width:100%;min-height:60px;resize:vertical;margin-top:0.4rem"
+          >{{ rejection.reason if rejection and rejection.reason else '' }}</textarea>
+        </div>
+        <button type="submit" class="btn" style="width:100%;margin-top:0.5rem;font-size:0.85rem">Save</button>
+      </form>
+
+      <!-- Relevance -->
+      <form method="post" action="/review/relevance">
+        <input type="hidden" name="story_id" value="{{ story.id }}">
+        <input type="hidden" name="pos" value="{{ pos }}">
+        <div style="font-size:0.85rem;font-weight:600;margin-bottom:0.5rem;color:var(--navy)">Relevance</div>
+        <div class="relevance-options">
+          <label>
+            <input type="radio" name="score" value="Normal"
+              {% if not relevance or relevance.score == 'Normal' %}checked{% endif %}>
+            Normal
+          </label>
+          <label class="high">
+            <input type="radio" name="score" value="High"
+              {% if relevance and relevance.score == 'High' %}checked{% endif %}>
+            High
+          </label>
+          <label class="very-high">
+            <input type="radio" name="score" value="VeryHigh"
+              {% if relevance and relevance.score == 'VeryHigh' %}checked{% endif %}>
+            Very high
+          </label>
+        </div>
+        <textarea name="reason" placeholder="Reason (optional)"
+          class="note-input" style="width:100%;min-height:50px;resize:vertical;margin-bottom:0.5rem"
+        >{{ relevance.reason if relevance and relevance.reason else '' }}</textarea>
+        <button type="submit" class="btn" style="width:100%;font-size:0.85rem">Save</button>
+      </form>
+    </div>
+
+    <!-- Add label from taxonomy -->
+    <div class="ops-card">
+      <h3>Add a label</h3>
+
+      <form method="post" action="/review/add-label">
+        <input type="hidden" name="story_id" value="{{ story.id }}">
+        <input type="hidden" name="pos" value="{{ pos }}">
+
+        <script id="tax-data" type="application/json">{{ tax_json | safe }}</script>
+
+        <div style="margin-bottom:0.5rem">
+          <select name="taxonomy_label_id" id="taxonomy-select" style="width:100%;min-width:0">
+            <option value="">— select a label —</option>
+            {% for top_label, sublabels in tax_tree.items() %}
+              <optgroup label="{{ top_label }}">
+                {% for t in sublabels %}
+                  <option value="{{ t.id }}">{{ t.sublabel }}</option>
+                {% endfor %}
+              </optgroup>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div style="margin-bottom:0.5rem">
+          <input type="text" id="label-search" placeholder="Search for a label"
+                 class="note-input" style="width:100%" list="sublabel-datalist" autocomplete="off"
+                 oninput="onLabelSearch(this.value)"
+                 onchange="syncDropdownFromSearch(this.value)">
+          <datalist id="sublabel-datalist"></datalist>
+        </div>
+
+        <div id="label-description" class="label-description" style="display:none"></div>
+
+        <input type="text" name="note" placeholder="Optional note"
+               class="note-input" style="width:100%;margin-bottom:0.5rem">
+        <button type="submit" class="btn btn-add" style="width:100%">Add label</button>
+      </form>
+
+      {% if my_added %}
+      <div style="margin-top:0.75rem">
+        <div style="font-size:0.78rem;font-weight:600;color:var(--muted);margin-bottom:0.35rem;text-transform:uppercase;letter-spacing:0.05em">My labels</div>
+        {% for a in my_added %}
+        <div class="added-label-row">
+          <span style="font-size:0.85rem">
+            {% if a.taxonomy_label %}
+              <strong>{{ a.taxonomy_label.label }}</strong>
+              {% if a.taxonomy_label.sublabel %} › {{ a.taxonomy_label.sublabel }}{% endif %}
+            {% elif a.free_text %}{{ a.free_text }}{% endif %}
+            {% if a.note %}<em class="muted"> — {{ a.note }}</em>{% endif %}
+          </span>
+          <form method="post" action="/review/remove-added-label" style="display:inline">
+            <input type="hidden" name="added_label_id" value="{{ a.id }}">
+            <input type="hidden" name="pos" value="{{ pos }}">
+            <button type="submit" class="btn btn-remove">✕</button>
+          </form>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {% if my_created %}
+      <div style="margin-top:0.5rem">
+        <div style="font-size:0.78rem;font-weight:600;color:var(--muted);margin-bottom:0.35rem;text-transform:uppercase;letter-spacing:0.05em">My new labels</div>
+        {% for a in my_created %}
+        <div class="added-label-row">
+          <span style="font-size:0.85rem">
             <strong>{{ a.taxonomy_label.label }}</strong>
             {% if a.taxonomy_label.sublabel %} › {{ a.taxonomy_label.sublabel }}{% endif %}
-          {% elif a.free_text %}
-            {{ a.free_text }}
-          {% endif %}
-          {% if a.note %}<em class="muted"> — {{ a.note }}</em>{% endif %}
-        </span>
-        <form method="post" action="/review/remove-added-label" style="display:inline">
-          <input type="hidden" name="added_label_id" value="{{ a.id }}">
-          <input type="hidden" name="pos" value="{{ pos }}">
-          <button type="submit" class="btn btn-remove">Remove</button>
-        </form>
-      </div>
-      {% endfor %}
-    </div>
-    {% endif %}
-
-    {% if added_created %}
-    <div class="added-labels" style="margin-top:0.75rem">
-      <h3>Labels created this session</h3>
-      {% for a in added_created %}
-      <div class="added-label-row">
-        <span>
-          <strong>{{ a.taxonomy_label.label }}</strong>
-          {% if a.taxonomy_label.sublabel %} › {{ a.taxonomy_label.sublabel }}{% endif %}
-          <span class="badge" style="font-size:0.7rem;margin-left:0.4rem">new</span>
-          {% if a.note %}<em class="muted"> — {{ a.note }}</em>{% endif %}
-        </span>
-        <form method="post" action="/review/remove-added-label" style="display:inline">
-          <input type="hidden" name="added_label_id" value="{{ a.id }}">
-          <input type="hidden" name="pos" value="{{ pos }}">
-          <button type="submit" class="btn btn-remove">Remove</button>
-        </form>
-      </div>
-      {% endfor %}
-    </div>
-    {% endif %}
-  </div>
-
-  <!-- Create a new taxonomy label -->
-  <div class="add-label-section">
-    <h2>Create a new taxonomy label</h2>
-    <p class="muted" style="font-size:0.85rem;margin-bottom:1rem">
-      Use this only if the label you need does not exist in the taxonomy above.
-      You must check the term against the
-      <a href="https://eurovoc.europa.eu" target="_blank">EuroVoc EU terminology database</a>
-      before saving.
-    </p>
-
-    <!-- Row 1: category dropdown -->
-    <div style="margin-bottom:0.6rem">
-      <select id="category-select" onchange="onCategoryChange()" style="width:100%">
-        <option value="">— select a top-level category —</option>
-        {% for cat in tax_categories %}
-          <option value="{{ cat }}">{{ cat }}</option>
+            <span class="badge" style="font-size:0.65rem;margin-left:0.25rem">new</span>
+            {% if a.note %}<em class="muted"> — {{ a.note }}</em>{% endif %}
+          </span>
+          <form method="post" action="/review/remove-added-label" style="display:inline">
+            <input type="hidden" name="added_label_id" value="{{ a.id }}">
+            <input type="hidden" name="pos" value="{{ pos }}">
+            <button type="submit" class="btn btn-remove">✕</button>
+          </form>
+        </div>
         {% endfor %}
-        <option value="__other__">Other (create new category)</option>
-      </select>
+      </div>
+      {% endif %}
     </div>
 
-    <!-- "Other" category row (hidden until selected) -->
-    <div id="other-category-row" style="display:none;margin-bottom:0.6rem">
-      <div style="display:flex;gap:0.6rem;flex-wrap:wrap;align-items:center">
-        <input id="other-category-input" type="text" placeholder="New category name"
-               class="note-input" style="flex:1" oninput="onOtherCategoryInput()">
-        <button type="button" class="btn btn-nav" onclick="checkCategory()">Check EU terms</button>
+    <!-- Navigation -->
+    <div class="ops-card">
+      {% set mandatory_ok = mandatory and mandatory.target_user and mandatory.concepts %}
+      {% if not mandatory_ok %}
+      <p class="muted" style="font-size:0.8rem;margin-bottom:0.6rem">
+        Fill in the mandatory fields above before advancing.
+      </p>
+      {% endif %}
+      <div class="nav-buttons" style="margin:0">
+        {% if pos > 0 %}
+          <a href="/review?pos={{ pos - 1 }}" class="btn btn-nav">← Previous</a>
+        {% else %}
+          <span class="btn btn-nav disabled">← Previous</span>
+        {% endif %}
+
+        {% if pos < total - 1 %}
+          {% if mandatory_ok %}
+            <a href="/review?pos={{ pos + 1 }}" class="btn btn-nav btn-next">Next →</a>
+          {% else %}
+            <a href="/review?pos={{ pos + 1 }}" class="btn btn-nav btn-next"
+               onclick="return warnMandatory(event)">Next →</a>
+          {% endif %}
+        {% else %}
+          <a href="/stats" class="btn btn-nav btn-finish">View statistics →</a>
+        {% endif %}
       </div>
-      <div id="category-eurovoc-result" style="margin-top:0.5rem"></div>
     </div>
 
-    <!-- Row 2: new label name + EuroVoc check -->
-    <div style="display:flex;gap:0.6rem;margin-bottom:0.6rem;flex-wrap:wrap;align-items:center">
-      <input id="new-sublabel" type="text" placeholder="New label name"
-             class="note-input" style="flex:1" oninput="onSublabelInput()">
-      <button type="button" class="btn btn-nav" onclick="checkSublabel()">Check EU terms</button>
-    </div>
+  </div><!-- /review-right -->
 
-    <!-- EuroVoc results for sublabel -->
-    <div id="eurovoc-result" style="display:none;margin-bottom:0.75rem"></div>
-
-    <!-- Submit form — button locked until EuroVoc checked -->
-    <form method="post" action="/review/create-taxonomy-label" id="create-label-form">
-      <input type="hidden" name="story_id" value="{{ story.id }}">
-      <input type="hidden" name="pos" value="{{ pos }}">
-      <input type="hidden" name="top_label" id="hidden-toplabel">
-      <input type="hidden" name="sublabel" id="hidden-sublabel">
-      <input type="hidden" name="description" id="hidden-description">
-      <div style="margin-bottom:0.6rem">
-        <input type="text" id="new-description" placeholder="Definition (optional)"
-               class="note-input" style="width:100%">
-      </div>
-      <div style="display:flex;gap:0.6rem;flex-wrap:wrap">
-        <input type="text" name="note" placeholder="Optional note" class="note-input" style="flex:1">
-        <button type="submit" id="create-btn" class="btn btn-add"
-                style="opacity:0.35;pointer-events:none" disabled
-                onclick="return prepareCreate()">Create &amp; add to story</button>
-      </div>
-    </form>
-  </div>
-
-  <!-- Navigation -->
-  <div class="nav-buttons">
-    {% if pos > 0 %}
-      <a href="/review?pos={{ pos - 1 }}" class="btn btn-nav">← Previous</a>
-    {% else %}
-      <span class="btn btn-nav disabled">← Previous</span>
-    {% endif %}
-
-    {% if pos < total - 1 %}
-      <a href="/review?pos={{ pos + 1 }}" class="btn btn-nav btn-next">Next →</a>
-    {% else %}
-      <a href="/stats" class="btn btn-nav btn-finish">View session statistics →</a>
-    {% endif %}
-  </div>
-
-</div>
+</div><!-- /review-columns -->
 
 <script>
+/* ── Mandatory warning ───────────────────────────────────────────────────── */
+function warnMandatory(e) {
+  return confirm(
+    "You haven't filled in all mandatory fields (target user and/or concepts) for this story.\n\n" +
+    "You can still advance, but you'll need to come back to complete them.\n\nContinue?"
+  );
+}
+
+/* ── Rejection reason toggle ─────────────────────────────────────────────── */
+function toggleRejectionReason(show) {
+  document.getElementById("rejection-reason").style.display = show ? "block" : "none";
+}
+
+/* ── EuroVoc / create-label logic ─────────────────────────────────────────── */
 let sublabelChecked = false;
 let categoryChecked = false;
 
@@ -272,19 +395,11 @@ function onCategoryChange() {
   updateCreateButton();
 }
 
-function onOtherCategoryInput() {
-  categoryChecked = false;
-  updateCreateButton();
-}
-
-function onSublabelInput() {
-  sublabelChecked = false;
-  updateCreateButton();
-}
+function onOtherCategoryInput() { categoryChecked = false; updateCreateButton(); }
+function onSublabelInput()      { sublabelChecked = false; updateCreateButton(); }
 
 function buildEuroVocHtml(data, inputId, type) {
-  const inputEl = document.getElementById(inputId);
-  const term = inputEl ? inputEl.value : "";
+  const term = document.getElementById(inputId)?.value || "";
   let html = "";
   if (data.matches && data.matches.length) {
     html += `<div class="label-description" style="margin-bottom:0.5rem">
@@ -293,13 +408,13 @@ function buildEuroVocHtml(data, inputId, type) {
         `<span style="display:inline-flex;align-items:center;gap:0.35rem;margin:0.2rem 0.5rem 0.2rem 0">
           <span>${m}</span>
           <button type="button" class="btn-use-this"
-              onclick="useEuroVoc('${inputId}','${m.replace(/'/g,"\\'")}','${type}')">use this</button>
+            onclick="useEuroVoc('${inputId}','${m.replace(/'/g,"\\'")}','${type}')">use this</button>
         </span>`
       ).join("")}
     </div>`;
   } else {
     html += `<div class="label-description" style="margin-bottom:0.5rem;border-color:var(--muted)">
-      No EuroVoc match found for "<em>${term}</em>". You may still proceed.
+      No EuroVoc match for "<em>${term}</em>". You may still proceed.
     </div>`;
   }
   if (data.duplicates && data.duplicates.length) {
@@ -315,14 +430,14 @@ function buildEuroVocHtml(data, inputId, type) {
 
 function useEuroVoc(inputId, term, type) {
   document.getElementById(inputId).value = term;
-  if (type === "sublabel") { sublabelChecked = true; }
-  else { categoryChecked = true; }
+  if (type === "sublabel") sublabelChecked = true;
+  else categoryChecked = true;
   updateCreateButton();
 }
 
 async function checkSublabel() {
   const term = document.getElementById("new-sublabel").value.trim();
-  const box = document.getElementById("eurovoc-result");
+  const box  = document.getElementById("eurovoc-result");
   if (!term) { box.style.display = "none"; return; }
   box.style.display = "block";
   box.innerHTML = '<span class="muted">Looking up EuroVoc…</span>';
@@ -334,7 +449,7 @@ async function checkSublabel() {
 
 async function checkCategory() {
   const term = document.getElementById("other-category-input").value.trim();
-  const box = document.getElementById("category-eurovoc-result");
+  const box  = document.getElementById("category-eurovoc-result");
   if (!term) { box.innerHTML = ""; return; }
   box.innerHTML = '<span class="muted">Looking up EuroVoc…</span>';
   const data = await fetch(`/api/eurovoc?term=${encodeURIComponent(term)}`).then(r => r.json());
@@ -346,12 +461,9 @@ async function checkCategory() {
 function prepareCreate() {
   const sel = document.getElementById("category-select");
   const sub = document.getElementById("new-sublabel").value.trim();
-  let top;
-  if (sel.value === "__other__") {
-    top = document.getElementById("other-category-input").value.trim();
-  } else {
-    top = sel.value;
-  }
+  const top = sel.value === "__other__"
+    ? document.getElementById("other-category-input").value.trim()
+    : sel.value;
   if (!top || !sub) { alert("Please fill in both the category and the new label name."); return false; }
   document.getElementById("hidden-toplabel").value = top;
   document.getElementById("hidden-sublabel").value = sub;
@@ -360,11 +472,11 @@ function prepareCreate() {
   return true;
 }
 
-// ── Taxonomy data (module-scoped so the poll can update it) ──────────────────
+/* ── Taxonomy lookup ─────────────────────────────────────────────────────── */
 let taxData = JSON.parse(document.getElementById("tax-data").textContent);
 
 document.addEventListener("DOMContentLoaded", function () {
-  const sel = document.getElementById("taxonomy-select");
+  const sel     = document.getElementById("taxonomy-select");
   const descBox = document.getElementById("label-description");
   if (sel) {
     sel.addEventListener("change", function () {
@@ -375,22 +487,17 @@ document.addEventListener("DOMContentLoaded", function () {
       } else {
         descBox.style.display = "none";
       }
-      // Sync text field to match the dropdown selection
       const searchInput = document.getElementById("label-search");
-      if (searchInput) {
-        searchInput.value = entry ? (entry.sublabel || "") : "";
-      }
+      if (searchInput) searchInput.value = entry ? (entry.sublabel || "") : "";
     });
   }
 });
 
-// ── Label search → datalist population (fires on every keystroke) ────────────
 function onLabelSearch(val) {
-  const rawVal = val.trim();
-  const lval = rawVal.toLowerCase();
-  const dl = document.getElementById("sublabel-datalist");
+  const lval = val.trim().toLowerCase();
+  const dl   = document.getElementById("sublabel-datalist");
   if (!dl) return;
-  if (rawVal.length >= 4) {
+  if (lval.length >= 4) {
     dl.innerHTML = "";
     for (const entry of Object.values(taxData)) {
       if (entry.sublabel && entry.sublabel.toLowerCase().includes(lval)) {
@@ -404,10 +511,9 @@ function onLabelSearch(val) {
   }
 }
 
-// ── Sync dropdown when user commits a selection (change/blur) ─────────────────
 function syncDropdownFromSearch(val) {
   const lval = val.trim().toLowerCase();
-  const sel = document.getElementById("taxonomy-select");
+  const sel  = document.getElementById("taxonomy-select");
   if (!lval) { sel.value = ""; return; }
   for (const opt of sel.options) {
     if (opt.text.trim().toLowerCase() === lval) {
@@ -425,7 +531,7 @@ function syncDropdownFromSearch(val) {
   }
 }
 
-// ── Live taxonomy refresh (every 60 s) ───────────────────────────────────────
+/* ── Live taxonomy refresh (every 60 s) ─────────────────────────────────── */
 async function refreshTaxonomy() {
   let data;
   try {
@@ -434,10 +540,8 @@ async function refreshTaxonomy() {
     data = await resp.json();
   } catch (_) { return; }
 
-  // Update flat lookup used by description tooltip
   taxData = data.flat;
 
-  // Rebuild "Add label" dropdown
   const sel = document.getElementById("taxonomy-select");
   if (sel) {
     const saved = sel.value;
@@ -457,12 +561,11 @@ async function refreshTaxonomy() {
     sel.value = saved;
   }
 
-  // Rebuild "Create" category dropdown (keep placeholder + __other__ entries)
   const catSel = document.getElementById("category-select");
   if (catSel) {
-    const savedCat = catSel.value;
+    const savedCat  = catSel.value;
     const placeholder = catSel.options[0];
-    const otherOpt   = catSel.options[catSel.options.length - 1];
+    const otherOpt    = catSel.options[catSel.options.length - 1];
     catSel.innerHTML = "";
     catSel.appendChild(placeholder);
     for (const cat of data.categories) {
@@ -475,11 +578,8 @@ async function refreshTaxonomy() {
     catSel.value = savedCat;
   }
 
-  // Refresh datalist if the search field already has 4+ characters
   const searchInput = document.getElementById("label-search");
-  if (searchInput) {
-    onLabelSearch(searchInput.value);
-  }
+  if (searchInput) onLabelSearch(searchInput.value);
 }
 
 setInterval(refreshTaxonomy, 60000);

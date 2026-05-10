@@ -23,6 +23,9 @@ async def init_db():
         for stmt in [
             "ALTER TABLE taxonomy_labels ADD COLUMN is_user_created INTEGER DEFAULT 0",
             "ALTER TABLE sessions ADD COLUMN started_by INTEGER REFERENCES users(id)",
+            "ALTER TABLE sessions ADD COLUMN overlap_pct REAL DEFAULT 0.0",
+            "ALTER TABLE sessions ADD COLUMN stories_per_group INTEGER",
+            "ALTER TABLE sessions ADD COLUMN chart_refresh_secs INTEGER DEFAULT 300",
         ]:
             try:
                 await conn.execute(text(stmt))

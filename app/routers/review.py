@@ -1,5 +1,5 @@
-from app.templates import templates
 import json
+from app.templates import templates
 from difflib import SequenceMatcher
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
@@ -10,13 +10,16 @@ import httpx
 from app.auth import get_current_user
 from app.database import SessionLocal
 from app.models import (
-    GroupAssignment, LabelDecision, AddedLabel,
-    Session as ReviewSession, StoryLabel, TaxonomyLabel, UserStory
+    AddedLabel, AddedLabelDecision, GroupAssignment,
+    MandatoryClassification, Session as ReviewSession,
+    StoryRejection, StoryRelevance, TaxonomyLabel, UserStory
 )
 
 router = APIRouter()
 
 SPARQL_ENDPOINT = "https://publications.europa.eu/webapi/rdf/sparql"
+
+MANDATORY_CATEGORIES = {"Target user in story", "User Story Concept"}
 
 
 async def get_active_session(db) -> ReviewSession | None:
@@ -56,40 +59,70 @@ async def review(request: Request, pos: int = 0):
         assignment = assignments[pos]
 
         story = await db.get(UserStory, assignment.story_id)
-        label_result = await db.execute(
-            select(StoryLabel).where(StoryLabel.story_id == story.id)
-        )
-        labels = label_result.scalars().all()
 
-        decisions_result = await db.execute(
-            select(LabelDecision).where(
-                and_(
-                    LabelDecision.session_id == rev_session.id,
-                    LabelDecision.story_id == story.id,
-                    LabelDecision.user_id == user.id,
-                )
-            )
-        )
-        decisions = {d.story_label_id: d.decision for d in decisions_result.scalars()}
-
+        # All labels added by anyone in this group for this story/session
+        from app.models import User as UserModel
         added_result = await db.execute(
-            select(AddedLabel).where(
-                and_(
-                    AddedLabel.session_id == rev_session.id,
-                    AddedLabel.story_id == story.id,
-                    AddedLabel.user_id == user.id,
-                )
-            ).options(selectinload(AddedLabel.taxonomy_label))
+            select(AddedLabel)
+            .join(UserModel, AddedLabel.user_id == UserModel.id)
+            .where(
+                AddedLabel.session_id == rev_session.id,
+                AddedLabel.story_id == story.id,
+                UserModel.group_id == user.group_id,
+            )
+            .options(selectinload(AddedLabel.taxonomy_label),
+                     selectinload(AddedLabel.decisions))
         )
-        added_all = added_result.scalars().all()
+        all_added = added_result.scalars().all()
 
+        # Separate: own labels vs teammate labels
+        my_labels = [a for a in all_added if a.user_id == user.id]
+        teammate_labels = [a for a in all_added if a.user_id != user.id]
+
+        # My decisions on teammate labels
+        my_decisions = {}
+        for dec in [d for a in teammate_labels for d in a.decisions if d.user_id == user.id]:
+            my_decisions[dec.added_label_id] = dec.decision
+
+        # User-created added labels (for separate display)
         uc_ids_result = await db.execute(
             select(TaxonomyLabel.id).where(TaxonomyLabel.is_user_created == True)
         )
         user_created_ids = set(uc_ids_result.scalars().all())
-        added = [a for a in added_all if a.taxonomy_label_id not in user_created_ids]
-        added_created = [a for a in added_all if a.taxonomy_label_id in user_created_ids]
+        my_added = [a for a in my_labels if a.taxonomy_label_id not in user_created_ids]
+        my_created = [a for a in my_labels if a.taxonomy_label_id in user_created_ids]
 
+        # Mandatory classification for this group/story/session
+        mc_result = await db.execute(
+            select(MandatoryClassification).where(
+                MandatoryClassification.session_id == rev_session.id,
+                MandatoryClassification.group_id == user.group_id,
+                MandatoryClassification.story_id == story.id,
+            )
+        )
+        mandatory = mc_result.scalar_one_or_none()
+
+        # Story rejection
+        rej_result = await db.execute(
+            select(StoryRejection).where(
+                StoryRejection.session_id == rev_session.id,
+                StoryRejection.group_id == user.group_id,
+                StoryRejection.story_id == story.id,
+            )
+        )
+        rejection = rej_result.scalar_one_or_none()
+
+        # Story relevance
+        rel_result = await db.execute(
+            select(StoryRelevance).where(
+                StoryRelevance.session_id == rev_session.id,
+                StoryRelevance.group_id == user.group_id,
+                StoryRelevance.story_id == story.id,
+            )
+        )
+        relevance = rel_result.scalar_one_or_none()
+
+        # Taxonomy — split mandatory from regular
         tax_result = await db.execute(select(TaxonomyLabel).order_by(
             TaxonomyLabel.label, TaxonomyLabel.sublabel
         ))
@@ -97,89 +130,48 @@ async def review(request: Request, pos: int = 0):
 
         tax_tree: dict[str, list] = {}
         tax_json: dict[str, dict] = {}
-        tax_desc: dict[str, str] = {}
+        target_user_sublabels: list[str] = []
+        concept_sublabels: list[str] = []
+        tax_categories: list[str] = []
+
         for t in taxonomy:
+            if not t.sublabel:
+                continue
+            if t.label in MANDATORY_CATEGORIES:
+                if t.label == "Target user in story":
+                    target_user_sublabels.append(t.sublabel)
+                else:
+                    concept_sublabels.append(t.sublabel)
+                continue
             tax_tree.setdefault(t.label, [])
-            if t.sublabel:
-                tax_tree[t.label].append(t)
-                tax_json[str(t.id)] = {
-                    "label": t.label,
-                    "sublabel": t.sublabel or "",
-                    "description": t.description or "",
-                }
-            if t.description:
-                if t.sublabel:
-                    tax_desc[t.sublabel.strip().lower()] = t.description
-                tax_desc[t.label.strip().lower()] = t.description
+            tax_tree[t.label].append(t)
+            tax_json[str(t.id)] = {
+                "label": t.label,
+                "sublabel": t.sublabel or "",
+                "description": t.description or "",
+            }
 
-        label_descriptions: dict[int, str] = {}
-        for lbl in labels:
-            desc = tax_desc.get(lbl.label_text.strip().lower(), "")
-            if desc:
-                label_descriptions[lbl.id] = desc
-
-        # Unique top-level categories for the "create label" dropdown
         tax_categories = [cat for cat, subs in tax_tree.items() if subs]
 
         return templates.TemplateResponse(request, "review.html", {
             "user": user,
             "story": story,
-            "labels": labels,
-            "decisions": decisions,
-            "added": added,
-            "added_created": added_created,
             "pos": pos,
             "total": total,
             "session_id": rev_session.id,
+            "my_added": my_added,
+            "my_created": my_created,
+            "teammate_labels": teammate_labels,
+            "my_decisions": my_decisions,
+            "mandatory": mandatory,
+            "rejection": rejection,
+            "relevance": relevance,
+            "target_user_sublabels": target_user_sublabels,
+            "concept_sublabels": concept_sublabels,
             "tax_json": json.dumps(tax_json),
             "tax_tree": tax_tree,
-            "label_descriptions": label_descriptions,
             "tax_categories": tax_categories,
         })
-
-
-@router.post("/review/decide")
-async def decide(
-    request: Request,
-    story_id: int = Form(...),
-    story_label_id: int = Form(...),
-    decision: str = Form(...),
-    pos: int = Form(0),
-):
-    user = await get_current_user(request)
-    if not user:
-        return RedirectResponse(url="/login", status_code=302)
-    if decision not in ("confirm", "reject", "abstain"):
-        return JSONResponse({"error": "invalid decision"}, status_code=400)
-
-    async with SessionLocal() as db:
-        rev_session = await get_active_session(db)
-        if not rev_session:
-            return RedirectResponse(url="/review", status_code=302)
-
-        result = await db.execute(
-            select(LabelDecision).where(
-                and_(
-                    LabelDecision.session_id == rev_session.id,
-                    LabelDecision.user_id == user.id,
-                    LabelDecision.story_label_id == story_label_id,
-                )
-            )
-        )
-        existing = result.scalar_one_or_none()
-        if existing:
-            existing.decision = decision
-        else:
-            db.add(LabelDecision(
-                session_id=rev_session.id,
-                user_id=user.id,
-                story_id=story_id,
-                story_label_id=story_label_id,
-                decision=decision,
-            ))
-        await db.commit()
-
-    return RedirectResponse(url=f"/review?pos={pos}", status_code=302)
 
 
 @router.post("/review/add-label")
@@ -231,6 +223,227 @@ async def remove_added_label(
     return RedirectResponse(url=f"/review?pos={pos}", status_code=302)
 
 
+@router.post("/review/decide-added-label")
+async def decide_added_label(
+    request: Request,
+    added_label_id: int = Form(...),
+    decision: str = Form(...),
+    pos: int = Form(0),
+):
+    user = await get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+    if decision not in ("confirm", "reject"):
+        return RedirectResponse(url=f"/review?pos={pos}", status_code=302)
+
+    async with SessionLocal() as db:
+        rev_session = await get_active_session(db)
+        if not rev_session:
+            return RedirectResponse(url="/review", status_code=302)
+
+        existing = (await db.execute(
+            select(AddedLabelDecision).where(
+                AddedLabelDecision.session_id == rev_session.id,
+                AddedLabelDecision.user_id == user.id,
+                AddedLabelDecision.added_label_id == added_label_id,
+            )
+        )).scalar_one_or_none()
+
+        if existing:
+            existing.decision = decision
+        else:
+            db.add(AddedLabelDecision(
+                session_id=rev_session.id,
+                user_id=user.id,
+                added_label_id=added_label_id,
+                decision=decision,
+            ))
+        await db.commit()
+
+    return RedirectResponse(url=f"/review?pos={pos}", status_code=302)
+
+
+@router.post("/review/mandatory")
+async def save_mandatory(
+    request: Request,
+    story_id: int = Form(...),
+    target_user: str = Form(""),
+    pos: int = Form(0),
+):
+    """Save target user selection. Concepts saved separately via /review/mandatory-concepts."""
+    user = await get_current_user(request)
+    if not user or not user.group_id:
+        return RedirectResponse(url="/login", status_code=302)
+
+    async with SessionLocal() as db:
+        rev_session = await get_active_session(db)
+        if not rev_session:
+            return RedirectResponse(url="/review", status_code=302)
+
+        mc = (await db.execute(
+            select(MandatoryClassification).where(
+                MandatoryClassification.session_id == rev_session.id,
+                MandatoryClassification.group_id == user.group_id,
+                MandatoryClassification.story_id == story_id,
+            )
+        )).scalar_one_or_none()
+
+        if mc:
+            mc.target_user = target_user.strip() or None
+            mc.user_id = user.id
+            mc.updated_at = __import__("datetime").datetime.utcnow()
+        else:
+            db.add(MandatoryClassification(
+                session_id=rev_session.id,
+                group_id=user.group_id,
+                story_id=story_id,
+                target_user=target_user.strip() or None,
+                concepts_json=json.dumps([]),
+                user_id=user.id,
+            ))
+        await db.commit()
+
+    return RedirectResponse(url=f"/review?pos={pos}", status_code=302)
+
+
+@router.post("/review/mandatory-concepts")
+async def save_mandatory_concepts(request: Request, pos: int = Form(0)):
+    """Save concept checkboxes (multi-value form field)."""
+    user = await get_current_user(request)
+    if not user or not user.group_id:
+        return RedirectResponse(url="/login", status_code=302)
+
+    form = await request.form()
+    story_id = int(form.get("story_id", 0))
+    concepts = form.getlist("concepts")
+
+    async with SessionLocal() as db:
+        rev_session = await get_active_session(db)
+        if not rev_session:
+            return RedirectResponse(url="/review", status_code=302)
+
+        mc = (await db.execute(
+            select(MandatoryClassification).where(
+                MandatoryClassification.session_id == rev_session.id,
+                MandatoryClassification.group_id == user.group_id,
+                MandatoryClassification.story_id == story_id,
+            )
+        )).scalar_one_or_none()
+
+        import datetime as dt
+        if mc:
+            mc.concepts = concepts
+            mc.user_id = user.id
+            mc.updated_at = dt.datetime.utcnow()
+        else:
+            new_mc = MandatoryClassification(
+                session_id=rev_session.id,
+                group_id=user.group_id,
+                story_id=story_id,
+                concepts_json=json.dumps(concepts),
+                user_id=user.id,
+            )
+            db.add(new_mc)
+        await db.commit()
+
+    return RedirectResponse(url=f"/review?pos={pos}", status_code=302)
+
+
+@router.post("/review/rejection")
+async def save_rejection(
+    request: Request,
+    story_id: int = Form(...),
+    rejected: str = Form("off"),
+    reason: str = Form(""),
+    pos: int = Form(0),
+):
+    user = await get_current_user(request)
+    if not user or not user.group_id:
+        return RedirectResponse(url="/login", status_code=302)
+
+    is_rejected = rejected in ("on", "true", "1", "yes")
+
+    async with SessionLocal() as db:
+        rev_session = await get_active_session(db)
+        if not rev_session:
+            return RedirectResponse(url="/review", status_code=302)
+
+        import datetime as dt
+        rej = (await db.execute(
+            select(StoryRejection).where(
+                StoryRejection.session_id == rev_session.id,
+                StoryRejection.group_id == user.group_id,
+                StoryRejection.story_id == story_id,
+            )
+        )).scalar_one_or_none()
+
+        if rej:
+            rej.rejected = is_rejected
+            rej.reason = reason.strip() or None
+            rej.user_id = user.id
+            rej.updated_at = dt.datetime.utcnow()
+        else:
+            db.add(StoryRejection(
+                session_id=rev_session.id,
+                group_id=user.group_id,
+                story_id=story_id,
+                rejected=is_rejected,
+                reason=reason.strip() or None,
+                user_id=user.id,
+            ))
+        await db.commit()
+
+    return RedirectResponse(url=f"/review?pos={pos}", status_code=302)
+
+
+@router.post("/review/relevance")
+async def save_relevance(
+    request: Request,
+    story_id: int = Form(...),
+    score: str = Form("Normal"),
+    reason: str = Form(""),
+    pos: int = Form(0),
+):
+    user = await get_current_user(request)
+    if not user or not user.group_id:
+        return RedirectResponse(url="/login", status_code=302)
+
+    if score not in ("Normal", "High", "VeryHigh"):
+        score = "Normal"
+
+    async with SessionLocal() as db:
+        rev_session = await get_active_session(db)
+        if not rev_session:
+            return RedirectResponse(url="/review", status_code=302)
+
+        import datetime as dt
+        rel = (await db.execute(
+            select(StoryRelevance).where(
+                StoryRelevance.session_id == rev_session.id,
+                StoryRelevance.group_id == user.group_id,
+                StoryRelevance.story_id == story_id,
+            )
+        )).scalar_one_or_none()
+
+        if rel:
+            rel.score = score
+            rel.reason = reason.strip() or None
+            rel.user_id = user.id
+            rel.updated_at = dt.datetime.utcnow()
+        else:
+            db.add(StoryRelevance(
+                session_id=rev_session.id,
+                group_id=user.group_id,
+                story_id=story_id,
+                score=score,
+                reason=reason.strip() or None,
+                user_id=user.id,
+            ))
+        await db.commit()
+
+    return RedirectResponse(url=f"/review?pos={pos}", status_code=302)
+
+
 @router.post("/review/create-taxonomy-label")
 async def create_taxonomy_label(
     request: Request,
@@ -278,7 +491,6 @@ async def create_taxonomy_label(
 
 @router.get("/api/taxonomy")
 async def taxonomy_list(request: Request):
-    """Return current taxonomy as JSON for client-side refresh."""
     user = await get_current_user(request)
     if not user:
         return JSONResponse({"error": "unauthorized"}, status_code=401)
@@ -291,18 +503,21 @@ async def taxonomy_list(request: Request):
     tree: dict[str, list] = {}
     flat: dict[str, dict] = {}
     for t in all_tax:
+        if not t.sublabel:
+            continue
+        if t.label in MANDATORY_CATEGORIES:
+            continue
         tree.setdefault(t.label, [])
-        if t.sublabel:
-            tree[t.label].append({
-                "id": t.id,
-                "sublabel": t.sublabel,
-                "description": t.description or "",
-            })
-            flat[str(t.id)] = {
-                "label": t.label,
-                "sublabel": t.sublabel,
-                "description": t.description or "",
-            }
+        tree[t.label].append({
+            "id": t.id,
+            "sublabel": t.sublabel,
+            "description": t.description or "",
+        })
+        flat[str(t.id)] = {
+            "label": t.label,
+            "sublabel": t.sublabel,
+            "description": t.description or "",
+        }
 
     categories = [cat for cat, subs in tree.items() if subs]
     return JSONResponse({"flat": flat, "tree": tree, "categories": categories})
@@ -310,14 +525,12 @@ async def taxonomy_list(request: Request):
 
 @router.get("/api/eurovoc")
 async def eurovoc_lookup(request: Request, term: str = ""):
-    """Query EuroVoc via EU Publications SPARQL endpoint."""
     user = await get_current_user(request)
     if not user or not term.strip():
         return JSONResponse({"matches": [], "duplicates": []})
 
     term = term.strip()
 
-    # EuroVoc SPARQL lookup
     sparql = f"""
     PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
     SELECT DISTINCT ?prefLabel WHERE {{
@@ -345,7 +558,6 @@ async def eurovoc_lookup(request: Request, term: str = ""):
     except Exception:
         pass
 
-    # Fuzzy duplicate detection against existing taxonomy
     async with SessionLocal() as db:
         all_tax = (await db.execute(select(TaxonomyLabel))).scalars().all()
 

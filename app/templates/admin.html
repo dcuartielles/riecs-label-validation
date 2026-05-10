@@ -7,25 +7,51 @@
 <!-- ── Session control ── -->
 <section class="admin-section">
   <h2>Session control</h2>
-  <div style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap">
-    {% if active_session %}
-      <div style="display:flex;align-items:center;gap:0.6rem">
-        <span class="session-live-badge">live</span>
-        <span style="font-size:0.95rem">
-          Session started {{ active_session.started_at.strftime('%d %b %Y at %H:%M') }}
-        </span>
+  {% if active_session %}
+    <div style="display:flex;align-items:center;gap:0.6rem;margin-bottom:1rem;flex-wrap:wrap">
+      <span class="session-live-badge">live</span>
+      <span style="font-size:0.95rem">
+        Session started {{ active_session.started_at.strftime('%d %b %Y at %H:%M') }}
+        &mdash; overlap {{ (active_session.overlap_pct * 100) | round(0) | int }}%
+        &mdash; chart refresh every {{ active_session.chart_refresh_secs }}s
+      </span>
+    </div>
+    <form method="post" action="/session/end"
+          onsubmit="return confirm('End the session for all groups? This cannot be undone.')">
+      <button type="submit" class="btn btn-reject">End session for everyone</button>
+    </form>
+  {% else %}
+    <p class="muted" style="font-size:0.95rem;margin-bottom:1rem">
+      No active session — all groups see the waiting screen.
+    </p>
+    <form method="post" action="/session/start" style="display:flex;flex-direction:column;gap:0.75rem;max-width:440px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
+        <div>
+          <label style="display:block;font-size:0.8rem;font-weight:600;color:var(--steel);margin-bottom:0.3rem">
+            Overlap % (0–100)
+          </label>
+          <div style="display:flex;align-items:center;gap:0.5rem">
+            <input type="range" name="overlap_pct" id="overlap-range"
+                   min="0" max="1" step="0.05" value="0"
+                   style="flex:1" oninput="document.getElementById('overlap-val').textContent = Math.round(this.value*100)+'%'">
+            <span id="overlap-val" style="font-size:0.9rem;font-weight:600;min-width:3rem;text-align:right">0%</span>
+          </div>
+          <p class="muted" style="font-size:0.78rem;margin-top:0.2rem">Fraction of stories shared by all groups for quality control.</p>
+        </div>
+        <div>
+          <label style="display:block;font-size:0.8rem;font-weight:600;color:var(--steel);margin-bottom:0.3rem">
+            Chart refresh (seconds)
+          </label>
+          <input type="number" name="chart_refresh_secs" value="300" min="60" step="60"
+                 class="note-input" style="width:100%">
+          <p class="muted" style="font-size:0.78rem;margin-top:0.2rem">Minimum 60 s. Default 300 s (5 min).</p>
+        </div>
       </div>
-      <form method="post" action="/session/end"
-            onsubmit="return confirm('End the session for all groups? This cannot be undone.')">
-        <button type="submit" class="btn btn-reject">End session for everyone</button>
-      </form>
-    {% else %}
-      <span class="muted" style="font-size:0.95rem">No active session — all groups see the waiting screen.</span>
-      <form method="post" action="/session/start">
+      <div>
         <button type="submit" class="btn btn-finish">Start session</button>
-      </form>
-    {% endif %}
-  </div>
+      </div>
+    </form>
+  {% endif %}
 </section>
 
 <!-- ── Group progress ── -->
@@ -33,14 +59,14 @@
   <h2>Group progress</h2>
   <table class="admin-table">
     <thead>
-      <tr><th>Group</th><th>Assigned stories</th><th>Stories reviewed</th></tr>
+      <tr><th>Group</th><th>Assigned stories</th><th>Stories with labels</th></tr>
     </thead>
     <tbody>
       {% for group in groups %}
       <tr>
         <td>{{ group.name }}</td>
         <td>{{ progress[group.id].total }}</td>
-        <td>{{ progress[group.id].decided }}</td>
+        <td>{{ progress[group.id].labelled }}</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -51,7 +77,6 @@
 <section class="admin-section">
   <h2>Users</h2>
 
-  <!-- Add user form -->
   <form method="post" action="/admin/add-user" class="add-user-form">
     <input type="text"  name="name"  placeholder="Full name"     required class="note-input">
     <input type="email" name="email" placeholder="Email address" required class="note-input">
@@ -108,39 +133,28 @@
   </table>
 </section>
 
-<!-- ── Cross-group comparison ── -->
+<!-- ── Cross-group overlap ── -->
 {% if comparison %}
 <section class="admin-section">
-  <h2>Cross-group comparison <span class="muted">({{ comparison | length }} overlapping stories)</span></h2>
-  <table class="admin-table comparison-table">
+  <h2>Cross-group overlap <span class="muted">({{ comparison | length }} stories reviewed by 2+ groups)</span></h2>
+  <table class="admin-table">
     <thead>
       <tr>
         <th>Story ID</th>
-        {% for group in groups %}<th colspan="3">{{ group.name }}</th>{% endfor %}
-      </tr>
-      <tr>
-        <th></th>
-        {% for group in groups %}
-          <th class="sub confirm">✓</th>
-          <th class="sub reject">✗</th>
-          <th class="sub abstain">—</th>
-        {% endfor %}
+        <th>Groups &amp; label counts</th>
       </tr>
     </thead>
     <tbody>
       {% for row in comparison %}
       <tr>
         <td><strong>{{ row.story_id }}</strong></td>
-        {% for group in groups %}
-          {% set gdata = row.groups | selectattr("group", "equalto", group.name) | first | default(none) %}
-          {% if gdata %}
-            <td class="num confirm">{{ gdata.confirm }}</td>
-            <td class="num reject">{{ gdata.reject }}</td>
-            <td class="num abstain">{{ gdata.abstain }}</td>
-          {% else %}
-            <td class="num muted" colspan="3">not reviewed</td>
-          {% endif %}
-        {% endfor %}
+        <td>
+          {% for gdata in row.groups %}
+            <span style="display:inline-block;margin-right:1rem;font-size:0.85rem">
+              <span style="font-weight:600">{{ gdata.group }}</span>: {{ gdata.labels }} label{{ 's' if gdata.labels != 1 else '' }}
+            </span>
+          {% endfor %}
+        </td>
       </tr>
       {% endfor %}
     </tbody>
@@ -148,8 +162,8 @@
 </section>
 {% else %}
 <section class="admin-section">
-  <h2>Cross-group comparison</h2>
-  <p class="muted">No stories have been reviewed by more than one group yet.</p>
+  <h2>Cross-group overlap</h2>
+  <p class="muted">No stories have been labelled by more than one group yet.</p>
 </section>
 {% endif %}
 

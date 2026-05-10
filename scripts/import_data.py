@@ -33,9 +33,21 @@ from app.config import find_latest_dataset
 DATASET_PATH = find_latest_dataset()
 LABELBOOK_PATH = Path("labelbook/Labelbook 2026-05-05_used.xlsx")
 
-GROUP_NAMES = ["Group A", "Group B", "Group C"]
-# Each group reviews this fraction of all stories; overlap comes from the random draws
-SUBSET_FRACTION = 0.6
+GROUP_NAMES = [
+    "IBE – Fundación Ibercivis",
+    "ECSA – European Citizen Science Association",
+    "CSIC – Spanish National Research Council",
+    "OeAD – Austrian Agency for Education and Internationalisation",
+    "ZSI – Centre for Social Innovation",
+    "AEL – Ars Electronica Linz",
+    "IIASA – International Institute for Applied Systems Analysis",
+    "MAU – Malmö University",
+    "UNIMIB – Università degli Studi di Milano-Bicocca",
+    "CPN – Center for the Promotion of Science",
+    "VT – Vilnius Gediminas Technical University",
+    "CSGP – Citizen Science Global Partnership",
+    "UZH – University of Zurich",
+]
 RANDOM_SEED = 42
 
 
@@ -163,15 +175,29 @@ def parse_taxonomy(path: Path) -> list[dict]:
 
 
 def assign_subsets(story_ids: list[int], group_count: int,
-                   fraction: float, seed: int) -> dict[int, list[int]]:
-    """Give each group a random subset of story IDs with partial overlap."""
+                   overlap_pct: float, seed: int) -> dict[int, list[int]]:
+    """
+    Assign story IDs to groups with configurable overlap.
+
+    overlap_pct: fraction of the story pool shared by all groups (0.0–1.0).
+    Each group gets ceil(n/group_count) unique stories plus all shared stories.
+    """
     rng = random.Random(seed)
-    n = len(story_ids)
-    subset_size = max(1, int(n * fraction))
+    ids = story_ids[:]
+    rng.shuffle(ids)
+
+    n = len(ids)
+    n_shared = round(n * overlap_pct)
+    shared = ids[:n_shared]
+    unique_pool = ids[n_shared:]
+
+    unique_per_group = max(1, (len(unique_pool) + group_count - 1) // group_count)
     assignments: dict[int, list[int]] = {}
     for g in range(group_count):
-        sample = rng.sample(story_ids, subset_size)
-        assignments[g] = sample
+        start = g * unique_per_group
+        end = min(start + unique_per_group, len(unique_pool))
+        assignments[g] = shared + unique_pool[start:end]
+
     return assignments
 
 
@@ -243,24 +269,8 @@ async def run(reset: bool = False, reset_labels: bool = False):
         else:
             print(f"Taxonomy already in DB ({len(existing_tax)}), skipping import.")
 
-        # --- Group assignments ---
-        existing_assignments = (await db.execute(select(GroupAssignment))).scalars().all()
-        if not existing_assignments:
-            all_stories = (await db.execute(select(UserStory))).scalars().all()
-            story_ids = [s.id for s in all_stories]
-            assignments = assign_subsets(story_ids, len(groups), SUBSET_FRACTION, RANDOM_SEED)
-
-            for g_idx, group in enumerate(groups):
-                for position, sid in enumerate(assignments[g_idx]):
-                    db.add(GroupAssignment(
-                        group_id=group.id,
-                        story_id=sid,
-                        position=position,
-                    ))
-            await db.commit()
-            print("Group subsets assigned.")
-        else:
-            print("Group assignments already exist, skipping.")
+        # Group assignments are created at session-start time via the admin panel.
+        print("Group assignments will be generated when a session is started.")
 
     print("Done.")
 

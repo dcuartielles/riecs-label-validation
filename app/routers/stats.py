@@ -2,11 +2,10 @@ from app.templates import templates
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select, func, and_
-from sqlalchemy.orm import selectinload
 from app.auth import get_current_user
 from app.database import SessionLocal
 from app.models import (
-    AddedLabel, Group, GroupAssignment, LabelDecision,
+    AddedLabel, AddedLabelDecision, Group, GroupAssignment,
     Session as ReviewSession, TaxonomyLabel, User, UserStory
 )
 
@@ -22,10 +21,8 @@ async def stats(request: Request, session_id: int | None = None):
     async with SessionLocal() as db:
         groups = (await db.execute(select(Group))).scalars().all()
 
-        # All sessions (global, no group filter)
         all_sessions = (await db.execute(
-            select(ReviewSession)
-            .order_by(ReviewSession.started_at.desc())
+            select(ReviewSession).order_by(ReviewSession.started_at.desc())
         )).scalars().all()
 
         selected_session = None
@@ -47,80 +44,74 @@ async def stats(request: Request, session_id: int | None = None):
                 .where(GroupAssignment.group_id == group.id)
             )).scalar()
 
-            session_filter = and_(
-                User.group_id == group.id,
-                LabelDecision.session_id == selected_session.id,
-            ) if selected_session else and_(User.group_id == group.id)
+            base_filter = [User.group_id == group.id]
+            if selected_session:
+                session_filter = base_filter + [AddedLabel.session_id == selected_session.id]
+            else:
+                session_filter = base_filter
 
             stories_reviewed = (await db.execute(
-                select(func.count(func.distinct(LabelDecision.story_id)))
-                .join(User, LabelDecision.user_id == User.id)
-                .where(session_filter)
+                select(func.count(func.distinct(AddedLabel.story_id)))
+                .join(User, AddedLabel.user_id == User.id)
+                .where(*session_filter)
             )).scalar()
-
-            confirmed = (await db.execute(
-                select(func.count(LabelDecision.id))
-                .join(User, LabelDecision.user_id == User.id)
-                .where(and_(session_filter, LabelDecision.decision == "confirm"))
-            )).scalar()
-
-            rejected = (await db.execute(
-                select(func.count(LabelDecision.id))
-                .join(User, LabelDecision.user_id == User.id)
-                .where(and_(session_filter, LabelDecision.decision == "reject"))
-            )).scalar()
-
-            added_filter = and_(
-                User.group_id == group.id,
-                AddedLabel.session_id == selected_session.id,
-            ) if selected_session else and_(User.group_id == group.id)
 
             new_labels = (await db.execute(
                 select(func.count(AddedLabel.id))
                 .join(User, AddedLabel.user_id == User.id)
-                .where(added_filter)
+                .where(*session_filter)
             )).scalar()
 
             created_labels = (await db.execute(
                 select(func.count(func.distinct(AddedLabel.taxonomy_label_id)))
                 .join(User, AddedLabel.user_id == User.id)
                 .join(TaxonomyLabel, AddedLabel.taxonomy_label_id == TaxonomyLabel.id)
-                .where(and_(added_filter, TaxonomyLabel.is_user_created == True))
+                .where(*session_filter, TaxonomyLabel.is_user_created == True)
+            )).scalar()
+
+            # Teammate reviews: decisions made by users in this group on peer labels
+            dec_filter = [User.group_id == group.id]
+            if selected_session:
+                dec_filter.append(AddedLabelDecision.session_id == selected_session.id)
+
+            teammate_reviews = (await db.execute(
+                select(func.count(AddedLabelDecision.id))
+                .join(User, AddedLabelDecision.user_id == User.id)
+                .where(*dec_filter)
             )).scalar()
 
             group_stats.append({
                 "group": group,
                 "total_assigned": total_assigned,
                 "stories_reviewed": stories_reviewed,
-                "confirmed": confirmed,
-                "rejected": rejected,
                 "new_labels": new_labels,
                 "created_labels": created_labels,
+                "teammate_reviews": teammate_reviews,
             })
 
         # Cross-group overlap (admin only)
-        overlap_data = []
+        overlap_count = 0
         if user.is_admin and len(groups) > 1 and selected_session:
             overlap_result = await db.execute(
-                select(
-                    UserStory.story_id,
-                    func.count(func.distinct(User.group_id)).label("group_count"),
+                select(func.count())
+                .select_from(
+                    select(AddedLabel.story_id)
+                    .join(User, AddedLabel.user_id == User.id)
+                    .where(
+                        User.group_id.isnot(None),
+                        AddedLabel.session_id == selected_session.id,
+                    )
+                    .group_by(AddedLabel.story_id)
+                    .having(func.count(func.distinct(User.group_id)) > 1)
+                    .subquery()
                 )
-                .join(LabelDecision, LabelDecision.story_id == UserStory.id)
-                .join(User, LabelDecision.user_id == User.id)
-                .where(and_(
-                    User.group_id.isnot(None),
-                    LabelDecision.session_id == selected_session.id,
-                ))
-                .group_by(UserStory.story_id)
-                .having(func.count(func.distinct(User.group_id)) > 1)
             )
-            overlap_data = overlap_result.all()
+            overlap_count = overlap_result.scalar() or 0
 
     return templates.TemplateResponse(request, "stats.html", {
         "user": user,
         "group_stats": group_stats,
-        "overlap_count": len(overlap_data),
+        "overlap_count": overlap_count,
         "all_sessions": all_sessions,
         "selected_session": selected_session,
     })
