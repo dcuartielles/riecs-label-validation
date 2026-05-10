@@ -1,0 +1,128 @@
+[
+  {
+    "id": 1,
+    "name": "david cuartielles",
+    "email": "dcuartielles@gmail.com",
+    "group_id": 8,
+    "is_admin": true
+  },
+  {
+    "id": 2,
+    "name": "Fermin Serrano",
+    "email": "ferminserrano@gmail.com",
+    "group_id": 1,
+    "is_admin": false
+  },
+  {
+    "id": 3,
+    "name": "Franziska Stressmann",
+    "email": "franziska.stressmann@gmail.com",
+    "group_id": 3,
+    "is_admin": false
+  },
+  {
+    "id": 4,
+    "name": "Bojan Kenig",
+    "email": "bkenig@cpn.rs",
+    "group_id": 10,
+    "is_admin": false
+  },
+  {
+    "id": 5,
+    "name": "Pablo Bes Alonso",
+    "email": "pabloars505@gmail.com",
+    "group_id": 6,
+    "is_admin": false
+  },
+  {
+    "id": 6,
+    "name": "Elisabeth Schauermann",
+    "email": "elisabeth.schauermann@gmail.com",
+    "group_id": 3,
+    "is_admin": false
+  },
+  {
+    "id": 7,
+    "name": "Martin Stojanov",
+    "email": "martin.stojanov.im@gmail.com",
+    "group_id": 8,
+    "is_admin": false
+  },
+  {
+    "id": 8,
+    "name": "Kaiti Wu",
+    "email": "kaiti.wu@ecsa.ngo",
+    "group_id": 1,
+    "is_admin": false
+  },
+  {
+    "id": 9,
+    "name": "Katja Mat",
+    "email": "katjamat@gmail.com",
+    "group_id": null,
+    "is_admin": false
+  },
+  {
+    "id": 10,
+    "name": "Karen Godoy",
+    "email": "karen.godoy.im@gmail.com",
+    "group_id": null,
+    "is_admin": false
+  },
+  {
+    "id": 11,
+    "name": "Francisco Sanz",
+    "email": "frasanz@ibercivis.es",
+    "group_id": 2,
+    "is_admin": false
+  },
+  {
+    "id": 12,
+    "name": "centercitizenscience@gmail.com",
+    "email": "centercitizenscience@gmail.com",
+    "group_id": 2,
+    "is_admin": false
+  },
+  {
+    "id": 13,
+    "name": "romane.blassel@gmail.com",
+    "email": "romane.blassel@gmail.com",
+    "group_id": null,
+    "is_admin": false
+  },
+  {
+    "id": 14,
+    "name": "Rosy Mondarini",
+    "email": "lala@lala.com",
+    "group_id": null,
+    "is_admin": false
+  },
+  {
+    "id": 15,
+    "name": "Fermín Serrano Sanz",
+    "email": "fermin@ibercivis.es",
+    "group_id": 1,
+    "is_admin": false
+  },
+  {
+    "id": 16,
+    "name": "Rosy Mondardini",
+    "email": "rosymond@gmail.com",
+    "group_id": 13,
+    "is_admin": false
+  },
+  {
+    "id": 17,
+    "name": "ilanamallak@gmail.com",
+    "email": "ilanamallak@gmail.com",
+    "group_id": 8,
+    "is_admin": false
+  },
+  {
+    "id": 18,
+    "name": "lindasee4@gmail.com",
+    "email": "lindasee4@gmail.com",
+    "group_id": 2,
+    "is_admin": false
+  }
+]
