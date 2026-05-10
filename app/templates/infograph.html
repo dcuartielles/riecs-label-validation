@@ -1,188 +1,710 @@
 {% extends "base.html" %}
-{% block title %}Infographs{% endblock %}
+{% block title %}Infographics{% endblock %}
 {% block content %}
+<style>
+main { max-width: 1160px; }
+.ig-tabs { display:flex; gap:0.3rem; flex-wrap:wrap; margin-bottom:1.25rem; }
+.ig-tab {
+  padding:0.4rem 0.85rem; border-radius:6px; border:2px solid var(--border);
+  background:var(--white); cursor:pointer; font-size:0.85rem; font-weight:600;
+  color:var(--muted); transition:all 0.12s;
+}
+.ig-tab.active { background:var(--teal); color:#fff; border-color:var(--teal); }
+.ig-tab:hover:not(.active) { border-color:var(--steel); color:var(--navy); }
+.ig-panel { display:none; }
+.ig-panel.active { display:block; }
+.chart-card {
+  background:var(--white); border-radius:12px; padding:1.25rem;
+  box-shadow:0 2px 8px rgba(44,50,76,0.07); margin-bottom:1.5rem;
+}
+.chart-card h2 { font-size:1rem; color:var(--navy); margin-bottom:0.2rem; }
+.chart-card .chart-sub { font-size:0.8rem; color:var(--muted); margin-bottom:0.9rem; }
+.chart-scroll { overflow-x:auto; }
+.legend-wrap { display:flex; flex-wrap:wrap; gap:0.4rem; margin-top:0.6rem; }
+.legend-item {
+  display:inline-flex; align-items:center; gap:0.3rem;
+  font-size:0.75rem; padding:0.15rem 0.5rem;
+  background:var(--white); border-radius:4px; border:1px solid var(--border);
+}
+.legend-dot { width:9px; height:9px; border-radius:50%; flex-shrink:0; }
+#tip {
+  position:fixed; pointer-events:none; opacity:0;
+  background:var(--navy); color:#fff;
+  padding:0.45rem 0.7rem; border-radius:7px;
+  font-size:0.8rem; line-height:1.45; max-width:240px;
+  box-shadow:0 2px 10px rgba(0,0,0,0.28); transition:opacity 0.1s; z-index:999;
+}
+.ig-row { display:flex; gap:1.5rem; flex-wrap:wrap; }
+.ig-row .chart-card { flex:1; min-width:280px; }
+.no-data { color:var(--muted); font-size:0.9rem; padding:1rem 0; }
+</style>
 
-<h1>Label co-occurrence map</h1>
-<p class="muted" style="margin-bottom:1.25rem;line-height:1.6">
-  Each node is a label; lines connect labels that appear together on the same story.
-  Thicker lines = more co-occurrences. Node size reflects how often a label appears.
-  Hover nodes and lines for details. Drag nodes to rearrange. Scroll to zoom.
-</p>
-
-<div style="display:flex;gap:1rem;align-items:center;margin-bottom:1rem;flex-wrap:wrap">
-  <label style="font-size:0.88rem;font-weight:600;color:var(--navy)">Show:</label>
-  <select id="filter-select" style="width:auto;min-width:0;padding:0.35rem 0.6rem">
-    <option value="all">All labels from spreadsheet</option>
-    <option value="confirmed">Confirmed labels only</option>
-  </select>
-  <span id="graph-stats" class="muted" style="font-size:0.82rem"></span>
+<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem;margin-bottom:1rem">
+  <h1 style="margin-bottom:0">Infographics</h1>
+  <span id="ig-status" class="muted" style="font-size:0.82rem">Loading…</span>
 </div>
 
-<div id="graph-wrap" style="
-  background:var(--white);border-radius:12px;
-  box-shadow:0 2px 8px rgba(44,50,76,0.07);
-  overflow:hidden;position:relative;
-">
-  <svg id="graph-svg" style="width:100%;height:68vh;display:block"></svg>
-  <div id="tip" style="
-    position:absolute;pointer-events:none;opacity:0;
-    background:var(--navy);color:#fff;
-    padding:0.45rem 0.7rem;border-radius:7px;
-    font-size:0.8rem;line-height:1.45;max-width:230px;
-    box-shadow:0 2px 10px rgba(0,0,0,0.28);
-    transition:opacity 0.1s;z-index:20;
-  "></div>
+<!-- Tab navigation -->
+<div class="ig-tabs">
+  <button class="ig-tab active" onclick="showTab('freq')">C01/C10 · Frequency</button>
+  <button class="ig-tab" onclick="showTab('pies')">C02/C03 · Distributions</button>
+  <button class="ig-tab" onclick="showTab('net')">C04/C11 · Networks</button>
+  <button class="ig-tab" onclick="showTab('heat')">C05 · Heatmap</button>
+  <button class="ig-tab" onclick="showTab('tree')">C06/C12 · Treemaps</button>
+  <button class="ig-tab" onclick="showTab('partner')">C07 · Partners</button>
+  <button class="ig-tab" onclick="showTab('pareto')">C08/C13 · Pareto</button>
+  <button class="ig-tab" onclick="showTab('breakdown')">C14/C15 · Breakdown</button>
 </div>
 
-<div id="legend" style="margin-top:0.9rem;display:flex;flex-wrap:wrap;gap:0.45rem"></div>
+<div id="tip"></div>
+
+<!-- C01 + C10: Frequency bars -->
+<div class="ig-panel active" id="panel-freq">
+  <div class="chart-card">
+    <h2>C01 — Top 50 Most Frequent Labels</h2>
+    <p class="chart-sub">All human-added sublabels (mandatory categories included), sorted by frequency</p>
+    <div class="chart-scroll"><svg id="c01-svg"></svg></div>
+    <div class="legend-wrap" id="c01-legend"></div>
+  </div>
+  <div class="chart-card">
+    <h2>C10 — Top 50 Technical Labels</h2>
+    <p class="chart-sub">User Story Concept and Target user in story excluded</p>
+    <div class="chart-scroll"><svg id="c10-svg"></svg></div>
+    <div class="legend-wrap" id="c10-legend"></div>
+  </div>
+</div>
+
+<!-- C02 + C03: Pies -->
+<div class="ig-panel" id="panel-pies">
+  <div class="ig-row">
+    <div class="chart-card">
+      <h2>C02 — Target User Distribution</h2>
+      <p class="chart-sub">Distribution of mandatory "Target user in story" classification</p>
+      <svg id="c02-svg" style="width:100%;height:340px;display:block"></svg>
+    </div>
+    <div class="chart-card">
+      <h2>C03 — Story Concept Distribution</h2>
+      <p class="chart-sub">Distribution of mandatory "User Story Concept" classification</p>
+      <svg id="c03-svg" style="width:100%;height:340px;display:block"></svg>
+    </div>
+  </div>
+</div>
+
+<!-- C04 + C11: Networks -->
+<div class="ig-panel" id="panel-net">
+  <div class="chart-card">
+    <h2>C04 — Label Co-occurrence Network</h2>
+    <p class="chart-sub">Top 40 labels; edge = co-appears in ≥2 stories. Drag nodes, scroll to zoom.</p>
+    <div id="c04-wrap" style="background:#f8f9fb;border-radius:8px;overflow:hidden;position:relative">
+      <svg id="c04-svg" style="width:100%;height:560px;display:block"></svg>
+    </div>
+    <div class="legend-wrap" id="c04-legend"></div>
+  </div>
+  <div class="chart-card">
+    <h2>C11 — Technical Label Co-occurrence Network</h2>
+    <p class="chart-sub">Same as C04, mandatory categories excluded</p>
+    <div id="c11-wrap" style="background:#f8f9fb;border-radius:8px;overflow:hidden;position:relative">
+      <svg id="c11-svg" style="width:100%;height:560px;display:block"></svg>
+    </div>
+    <div class="legend-wrap" id="c11-legend"></div>
+  </div>
+</div>
+
+<!-- C05: Heatmap -->
+<div class="ig-panel" id="panel-heat">
+  <div class="chart-card">
+    <h2>C05 — Label Co-occurrence Heatmap</h2>
+    <p class="chart-sub">Top 20 labels; diagonal = individual frequency; off-diagonal = co-occurrence count</p>
+    <div class="chart-scroll"><svg id="c05-svg"></svg></div>
+  </div>
+</div>
+
+<!-- C06 + C12: Treemaps -->
+<div class="ig-panel" id="panel-tree">
+  <div class="chart-card">
+    <h2>C06 — Label Taxonomy Treemap (all labels)</h2>
+    <p class="chart-sub">All sublabels sized by frequency, grouped by main category</p>
+    <div class="chart-scroll"><svg id="c06-svg"></svg></div>
+  </div>
+  <div class="chart-card">
+    <h2>C12 — Technical Label Treemap</h2>
+    <p class="chart-sub">Mandatory categories excluded</p>
+    <div class="chart-scroll"><svg id="c12-svg"></svg></div>
+  </div>
+</div>
+
+<!-- C07: Partner stacked bar -->
+<div class="ig-panel" id="panel-partner">
+  <div class="chart-card">
+    <h2>C07 — Label Category Distribution by Partner</h2>
+    <p class="chart-sub">100% stacked bar; technical main categories only</p>
+    <div class="chart-scroll"><svg id="c07-svg"></svg></div>
+    <div class="legend-wrap" id="c07-legend"></div>
+  </div>
+</div>
+
+<!-- C08 + C13: Pareto -->
+<div class="ig-panel" id="panel-pareto">
+  <div class="chart-card">
+    <h2>C08 — Cumulative Frequency (Pareto) — All Labels</h2>
+    <p class="chart-sub">Bars = individual frequency; line = cumulative % of all label assignments</p>
+    <div class="chart-scroll"><svg id="c08-svg"></svg></div>
+  </div>
+  <div class="chart-card">
+    <h2>C13 — Technical Label Pareto Curve</h2>
+    <p class="chart-sub">Same as C08, mandatory categories excluded</p>
+    <div class="chart-scroll"><svg id="c13-svg"></svg></div>
+  </div>
+</div>
+
+<!-- C14 + C15 + peer review -->
+<div class="ig-panel" id="panel-breakdown">
+  <div class="chart-card">
+    <h2>C14 — Top Technical Labels by User Type</h2>
+    <p class="chart-sub">Stories grouped by user type; top 10 technical labels per type</p>
+    <div class="chart-scroll"><svg id="c14-svg"></svg></div>
+  </div>
+  <div class="chart-card">
+    <h2>C15 — Top Technical Labels by Story Concept</h2>
+    <p class="chart-sub">Stories grouped by mandatory concept; top 10 technical labels per concept</p>
+    <div class="chart-scroll"><svg id="c15-svg"></svg></div>
+  </div>
+  <div class="ig-row">
+    <div class="chart-card">
+      <h2>Peer Review Summary</h2>
+      <p class="chart-sub">Teammate label decisions (confirm / reject) across the session</p>
+      <svg id="c-peer-svg" style="width:100%;height:200px;display:block"></svg>
+    </div>
+  </div>
+</div>
 
 <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
 <script>
-(function () {
-  const wrap    = document.getElementById("graph-wrap");
-  const svgEl   = document.getElementById("graph-svg");
-  const tip     = document.getElementById("tip");
-  const statsEl = document.getElementById("graph-stats");
-  const legend  = document.getElementById("legend");
-  const sel     = document.getElementById("filter-select");
+// ── Globals ──────────────────────────────────────────────────────────────────
+let gData = null;
+let activeTab = "freq";
+const rendered = new Set();
 
-  let sim;
+// ── Tooltip ───────────────────────────────────────────────────────────────────
+const tip = document.getElementById("tip");
+function showTip(ev, html) {
+  tip.innerHTML = html; tip.style.opacity = "1"; moveTip(ev);
+}
+function moveTip(ev) {
+  tip.style.left = (ev.clientX + 14) + "px";
+  tip.style.top  = (ev.clientY - 12) + "px";
+}
+function hideTip() { tip.style.opacity = "0"; }
 
-  /* ── tooltip helpers ─────────────────────────────────────────────────── */
-  function showTip(event, html) {
-    tip.innerHTML = html;
-    tip.style.opacity = "1";
-    moveTip(event);
+// ── Tab management ────────────────────────────────────────────────────────────
+function showTab(name) {
+  document.querySelectorAll(".ig-tab").forEach((b,i) => {
+    b.classList.toggle("active", ["freq","pies","net","heat","tree","partner","pareto","breakdown"][i] === name);
+  });
+  document.querySelectorAll(".ig-panel").forEach(p => p.classList.remove("active"));
+  document.getElementById("panel-" + name).classList.add("active");
+  activeTab = name;
+  if (gData && !rendered.has(name)) renderTab(name);
+}
+
+// ── Shared helpers ────────────────────────────────────────────────────────────
+const M = { top:20, right:20, bottom:100, left:45 };
+const MW = 900; // minimum width for wide charts
+
+function barSvg(svgId, data, legendId) {
+  // Horizontal bar chart — simpler to read with many labels
+  if (!data || !data.length) return;
+  const top = data.slice(0, 50);
+  const W = Math.max(top.length * 18, MW);
+  const H = 320;
+  const m = { top:15, right:15, bottom:90, left:45 };
+
+  const svg = d3.select("#" + svgId)
+    .attr("width", W).attr("height", H);
+  svg.selectAll("*").remove();
+  const g = svg.append("g").attr("transform", `translate(${m.left},${m.top})`);
+  const w = W - m.left - m.right;
+  const h = H - m.top - m.bottom;
+
+  const x = d3.scaleBand().domain(top.map(d=>d.sublabel)).range([0,w]).padding(0.15);
+  const y = d3.scaleLinear().domain([0, d3.max(top,d=>d.count)]).nice().range([h,0]);
+
+  g.append("g").attr("transform",`translate(0,${h})`).call(d3.axisBottom(x).tickSize(0))
+    .selectAll("text").attr("transform","rotate(-55)").style("text-anchor","end")
+    .attr("dx","-0.5em").attr("dy","0.1em").style("font-size","10px");
+
+  g.append("g").call(d3.axisLeft(y).ticks(5).tickFormat(d3.format("d")));
+  g.append("g").attr("class","grid")
+    .call(d3.axisLeft(y).ticks(5).tickSize(-w).tickFormat(""))
+    .selectAll("line").style("stroke","#eee");
+
+  g.selectAll(".bar").data(top).join("rect")
+    .attr("class","bar")
+    .attr("x", d=>x(d.sublabel)).attr("y", d=>y(d.count))
+    .attr("width", x.bandwidth()).attr("height", d=>h-y(d.count))
+    .attr("fill", d=>d.color).attr("rx",2)
+    .on("mouseover",(ev,d)=>showTip(ev,`<strong>${d.sublabel}</strong><br>${d.main_category||''}<br>Count: <strong>${d.count}</strong>`))
+    .on("mousemove",moveTip).on("mouseout",hideTip);
+
+  // Legend
+  if (legendId) {
+    const seen = new Set();
+    const cats = top.filter(d=>{ const k=d.main_category; if(!k||seen.has(k))return false; seen.add(k);return true; });
+    const lg = document.getElementById(legendId);
+    lg.innerHTML = "";
+    cats.forEach(d=>{
+      const el = document.createElement("span");
+      el.className = "legend-item";
+      el.innerHTML = `<span class="legend-dot" style="background:${d.color}"></span>${d.main_category}`;
+      lg.appendChild(el);
+    });
   }
-  function moveTip(event) {
-    const r = wrap.getBoundingClientRect();
-    let x = event.clientX - r.left + 14;
-    let y = event.clientY - r.top  - 10;
-    if (x + 240 > r.width)  x = event.clientX - r.left - 244;
-    if (y + 80  > r.height) y = event.clientY - r.top  - 70;
-    tip.style.left = x + "px";
-    tip.style.top  = y + "px";
+}
+
+function pieChart(svgId, data, labelField, valueField, colorFn) {
+  if (!data || !data.length) return;
+  const el = document.getElementById(svgId);
+  const W = el.clientWidth || 400, H = 340;
+  const r = Math.min(W * 0.45, H * 0.4);
+  const cx = W * 0.38, cy = H / 2;
+
+  d3.select("#" + svgId).attr("width", W).attr("height", H).selectAll("*").remove();
+  const svg = d3.select("#" + svgId);
+  const total = d3.sum(data, d=>d[valueField]);
+
+  const colors = d3.scaleOrdinal().domain(data.map(d=>d[labelField])).range(
+    colorFn ? data.map(d=>colorFn(d)) :
+    d3.schemeTableau10.concat(d3.schemePastel1)
+  );
+
+  const pie = d3.pie().value(d=>d[valueField]).sort((a,b)=>b[valueField]-a[valueField]);
+  const arc = d3.arc().innerRadius(0).outerRadius(r);
+  const arcLabel = d3.arc().innerRadius(r*0.6).outerRadius(r*0.9);
+
+  const g = svg.append("g").attr("transform",`translate(${cx},${cy})`);
+  g.selectAll("path").data(pie(data)).join("path")
+    .attr("d", arc).attr("fill", d=>colors(d.data[labelField]))
+    .attr("stroke","#fff").attr("stroke-width",1.5)
+    .on("mouseover",(ev,d)=>showTip(ev,
+      `<strong>${d.data[labelField]}</strong><br>Count: <strong>${d.data[valueField]}</strong><br>${(d.data[valueField]/total*100).toFixed(1)}%`))
+    .on("mousemove",moveTip).on("mouseout",hideTip);
+
+  g.selectAll("text.pct").data(pie(data)).join("text")
+    .attr("class","pct")
+    .attr("transform", d=>`translate(${arcLabel.centroid(d)})`)
+    .attr("text-anchor","middle").style("font-size","11px").style("fill","#fff").style("font-weight","600")
+    .text(d=>{ const pct=d.data[valueField]/total*100; return pct>3?pct.toFixed(0)+"%":""; });
+
+  // Legend on the right
+  const lg = svg.append("g").attr("transform",`translate(${cx+r+18},${cy - data.length*10})`);
+  data.forEach((d,i) => {
+    const row = lg.append("g").attr("transform",`translate(0,${i*20})`);
+    row.append("rect").attr("width",10).attr("height",10).attr("y",-8).attr("rx",2)
+      .attr("fill",colors(d[labelField]));
+    row.append("text").attr("x",14).style("font-size","11px").style("fill","#333")
+      .text(`${d[labelField]}  (${d[valueField]})`);
+  });
+}
+
+function networkChart(svgId, legendId, nodes_raw, links_raw) {
+  if (!nodes_raw || !nodes_raw.length) return;
+  const top40 = nodes_raw.slice(0,40);
+  const top40set = new Set(top40.map(d=>d.sublabel));
+  const links2 = links_raw.filter(l=>top40set.has(l.source)&&top40set.has(l.target));
+
+  const wrapId = svgId.replace("-svg","-wrap");
+  const wrap = document.getElementById(wrapId);
+  const W = wrap ? wrap.clientWidth : 800;
+  const H = 560;
+
+  const svg = d3.select("#"+svgId).attr("width",W).attr("height",H);
+  svg.selectAll("*").remove();
+
+  const maxFreq = d3.max(top40,d=>d.count)||1;
+  const maxW    = d3.max(links2,d=>d.count)||1;
+  const nodeR   = d=>4+(d.count/maxFreq)*16;
+  const linkW   = d=>0.5+(d.count/maxW)*7;
+  const linkOp  = d=>0.2+(d.count/maxW)*0.6;
+
+  const nodes = top40.map(d=>({...d, id:d.sublabel}));
+  const linksD = links2.map(d=>({...d}));
+
+  const g = svg.append("g");
+  svg.call(d3.zoom().scaleExtent([0.15,6]).on("zoom",e=>g.attr("transform",e.transform)));
+
+  const linkSel = g.append("g").selectAll("line").data(linksD).join("line")
+    .attr("stroke","#8aabbb").attr("stroke-width",d=>linkW(d)).attr("stroke-opacity",d=>linkOp(d))
+    .on("mouseover",(ev,d)=>showTip(ev,`<strong>${d.source.id||d.source}</strong> + <strong>${d.target.id||d.target}</strong><br>Co-occurs in <strong>${d.count}</strong> stories`))
+    .on("mousemove",moveTip).on("mouseout",hideTip);
+
+  const nodeSel = g.append("g").selectAll("circle").data(nodes).join("circle")
+    .attr("r",d=>nodeR(d)).attr("fill",d=>d.color).attr("stroke","#fff").attr("stroke-width",1.5)
+    .style("cursor","grab")
+    .on("mouseover",(ev,d)=>showTip(ev,`<strong>${d.sublabel}</strong><br>${d.main_category||''}<br>Appears in <strong>${d.count}</strong> stories`))
+    .on("mousemove",moveTip).on("mouseout",hideTip)
+    .call(d3.drag()
+      .on("start",(ev,d)=>{ if(!ev.active)sim.alphaTarget(0.3).restart(); d.fx=d.x;d.fy=d.y; })
+      .on("drag",(ev,d)=>{ d.fx=ev.x;d.fy=ev.y; })
+      .on("end",(ev,d)=>{ if(!ev.active)sim.alphaTarget(0); d.fx=null;d.fy=null; }));
+
+  const labelSel = g.append("g").selectAll("text").data(nodes).join("text")
+    .text(d=>d.sublabel).style("font-size","6.5px").style("font-weight","bold")
+    .style("fill","#222").style("pointer-events","none")
+    .attr("text-anchor","middle").attr("dy","0.35em");
+
+  const sim = d3.forceSimulation(nodes)
+    .force("link",d3.forceLink(linksD).id(d=>d.id).distance(80).strength(0.4))
+    .force("charge",d3.forceManyBody().strength(-200))
+    .force("center",d3.forceCenter(W/2,H/2))
+    .force("collision",d3.forceCollide().radius(d=>nodeR(d)+3))
+    .on("tick",()=>{
+      linkSel.attr("x1",d=>d.source.x).attr("y1",d=>d.source.y)
+             .attr("x2",d=>d.target.x).attr("y2",d=>d.target.y);
+      nodeSel.attr("cx",d=>d.x).attr("cy",d=>d.y);
+      labelSel.attr("x",d=>d.x).attr("y",d=>d.y+nodeR(d)+8);
+    });
+
+  if (legendId) {
+    const seen = new Set();
+    const lg = document.getElementById(legendId); lg.innerHTML="";
+    nodes.forEach(d=>{
+      if(!d.main_category||seen.has(d.main_category))return; seen.add(d.main_category);
+      const el=document.createElement("span"); el.className="legend-item";
+      el.innerHTML=`<span class="legend-dot" style="background:${d.color}"></span>${d.main_category}`;
+      lg.appendChild(el);
+    });
   }
-  function hideTip() { tip.style.opacity = "0"; }
+}
 
-  /* ── main draw ───────────────────────────────────────────────────────── */
-  async function draw(filter) {
-    const svg = d3.select(svgEl);
-    svg.selectAll("*").remove();
-    legend.innerHTML = "";
-    statsEl.textContent = "Loading…";
-    if (sim) sim.stop();
+function heatmap(svgId, data, n=20) {
+  const top = data.slice(0,n);
+  const labels = top.map(d=>d.sublabel);
+  if (!labels.length) return;
 
-    const data = await fetch(`/infograph/data?filter=${filter}`).then(r => r.json());
-    const { nodes, links, categories } = data;
-
-    if (!nodes.length) {
-      statsEl.textContent = "No data to display.";
-      return;
-    }
-
-    statsEl.textContent = `${nodes.length} labels · ${links.length} connections`;
-
-    const W = svgEl.clientWidth;
-    const H = svgEl.clientHeight;
-
-    const maxFreq   = d3.max(nodes, d => d.frequency)  || 1;
-    const maxWeight = d3.max(links, d => d.weight)      || 1;
-    const nodeR  = d => 5 + (d.frequency  / maxFreq)   * 20;
-    const linkW  = d => 1 + (d.weight     / maxWeight)  * 9;
-    const linkOp = d => 0.25 + (d.weight  / maxWeight)  * 0.55;
-
-    /* zoom */
-    const g = svg.append("g");
-    svg.call(
-      d3.zoom().scaleExtent([0.2, 5])
-        .on("zoom", e => g.attr("transform", e.transform))
-    );
-
-    /* links */
-    const linkSel = g.append("g")
-      .selectAll("line")
-      .data(links)
-      .join("line")
-        .attr("stroke", "#8aabbb")
-        .attr("stroke-width", d => linkW(d))
-        .attr("stroke-opacity", d => linkOp(d))
-        .attr("stroke-linecap", "round")
-        .style("cursor", "default")
-        .on("mouseover", (ev, d) => showTip(ev,
-          `<strong>${d.source.id ?? d.source}</strong>
-           &nbsp;+&nbsp;
-           <strong>${d.target.id ?? d.target}</strong>
-           <br>Co-occurs in <strong>${d.weight}</strong>
-           ${d.weight === 1 ? "story" : "stories"}`))
-        .on("mousemove", moveTip)
-        .on("mouseout",  hideTip);
-
-    /* nodes */
-    const nodeSel = g.append("g")
-      .selectAll("circle")
-      .data(nodes)
-      .join("circle")
-        .attr("r",            d => nodeR(d))
-        .attr("fill",         d => d.color)
-        .attr("stroke",       "#fff")
-        .attr("stroke-width", 1.5)
-        .style("cursor", "grab")
-        .on("mouseover", (ev, d) => showTip(ev,
-          `<strong>${d.label}</strong>
-           ${d.category ? `<br><span style="opacity:.75;font-size:.75rem">${d.category}</span>` : ""}
-           <br>Appears in <strong>${d.frequency}</strong>
-           ${d.frequency === 1 ? "story" : "stories"}`))
-        .on("mousemove", moveTip)
-        .on("mouseout",  hideTip)
-        .call(d3.drag()
-          .on("start", (ev, d) => {
-            if (!ev.active) sim.alphaTarget(0.3).restart();
-            d.fx = d.x; d.fy = d.y;
-          })
-          .on("drag",  (ev, d) => { d.fx = ev.x; d.fy = ev.y; })
-          .on("end",   (ev, d) => {
-            if (!ev.active) sim.alphaTarget(0);
-            d.fx = null; d.fy = null;
-          })
-        );
-
-    /* simulation */
-    sim = d3.forceSimulation(nodes)
-      .force("link", d3.forceLink(links).id(d => d.id)
-        .distance(d => 70 + (maxWeight - d.weight) * 3)
-        .strength(0.45))
-      .force("charge",    d3.forceManyBody().strength(-180))
-      .force("center",    d3.forceCenter(W / 2, H / 2))
-      .force("collision", d3.forceCollide().radius(d => nodeR(d) + 4))
-      .on("tick", () => {
-        linkSel
-          .attr("x1", d => d.source.x)
-          .attr("y1", d => d.source.y)
-          .attr("x2", d => d.target.x)
-          .attr("y2", d => d.target.y);
-        nodeSel
-          .attr("cx", d => d.x)
-          .attr("cy", d => d.y);
-      });
-
-    /* legend */
-    categories.forEach(cat => {
-      const s = document.createElement("span");
-      s.style.cssText =
-        "display:inline-flex;align-items:center;gap:0.3rem;" +
-        "font-size:0.78rem;padding:0.2rem 0.55rem;" +
-        "background:var(--white);border-radius:4px;border:1px solid var(--border)";
-      s.innerHTML =
-        `<span style="width:9px;height:9px;border-radius:50%;` +
-        `background:${cat.color};flex-shrink:0"></span>${cat.name}`;
-      legend.appendChild(s);
+  // Build matrix
+  const mat = Array.from({length:n},()=>new Array(n).fill(0));
+  const idx = Object.fromEntries(labels.map((l,i)=>[l,i]));
+  top.forEach((d,i)=>{ mat[i][i]=d.count; });
+  // co-occurrence filled from network data
+  if (gData && gData.cooccurrence) {
+    gData.cooccurrence.forEach(l=>{
+      const i=idx[l.source], j=idx[l.target];
+      if(i!=null&&j!=null){ mat[i][j]=l.count; mat[j][i]=l.count; }
     });
   }
 
-  sel.addEventListener("change", () => draw(sel.value));
-  draw("all");
-})();
-</script>
+  const cell = 28, pad = 120;
+  const W = n*cell+pad, H = n*cell+pad;
+  const maxVal = d3.max(mat.flat())||1;
+  const color = d3.scaleSequential([0,maxVal],d3.interpolateBlues);
 
+  const svg = d3.select("#"+svgId).attr("width",W).attr("height",H);
+  svg.selectAll("*").remove();
+  const g = svg.append("g").attr("transform",`translate(${pad},${pad})`);
+
+  // Cells
+  for (let i=0;i<n;i++) for (let j=0;j<n;j++) {
+    const v = mat[i][j];
+    g.append("rect").attr("x",j*cell).attr("y",i*cell).attr("width",cell-1).attr("height",cell-1)
+      .attr("fill",color(v)).attr("rx",2)
+      .on("mouseover",ev=>showTip(ev,`<strong>${labels[i]}</strong> × <strong>${labels[j]}</strong><br>Count: <strong>${v}</strong>`))
+      .on("mousemove",moveTip).on("mouseout",hideTip);
+    if (v>0) {
+      g.append("text").attr("x",j*cell+cell/2).attr("y",i*cell+cell/2+4)
+        .attr("text-anchor","middle").style("font-size","8px")
+        .style("fill",v>maxVal*0.45?"#fff":"#333").text(v);
+    }
+  }
+
+  // X labels
+  g.selectAll(".xlbl").data(labels).join("text")
+    .attr("class","xlbl").attr("x",(d,i)=>i*cell+cell/2).attr("y",-4)
+    .attr("text-anchor","start").attr("transform",(d,i)=>`rotate(-50,${i*cell+cell/2},-4)`)
+    .style("font-size","9px").style("fill","#333").text(d=>d.length>20?d.slice(0,20)+"…":d);
+
+  // Y labels
+  g.selectAll(".ylbl").data(labels).join("text")
+    .attr("class","ylbl").attr("x",-4).attr("y",(d,i)=>i*cell+cell/2+4)
+    .attr("text-anchor","end").style("font-size","9px").style("fill","#333")
+    .text(d=>d.length>20?d.slice(0,20)+"…":d);
+}
+
+function treemap(svgId, data, minCount=5) {
+  if (!data||!data.length) return;
+  const W = Math.max(document.getElementById(svgId)?.parentElement?.clientWidth||800,800);
+  const H = 480;
+
+  const hierarchy = { name:"root", children:[] };
+  const catMap = {};
+  data.forEach(d=>{
+    if(d.count<minCount)return;
+    if(!catMap[d.main_category]){ catMap[d.main_category]={name:d.main_category,children:[],color:d.color}; hierarchy.children.push(catMap[d.main_category]); }
+    catMap[d.main_category].children.push({name:d.sublabel,value:d.count,color:d.color,main:d.main_category});
+  });
+
+  const root = d3.hierarchy(hierarchy).sum(d=>d.value||0).sort((a,b)=>b.value-a.value);
+  d3.treemap().size([W,H]).padding(2).paddingTop(18)(root);
+
+  const svg = d3.select("#"+svgId).attr("width",W).attr("height",H);
+  svg.selectAll("*").remove();
+
+  const leaf = svg.selectAll("g").data(root.leaves()).join("g")
+    .attr("transform",d=>`translate(${d.x0},${d.y0})`);
+
+  leaf.append("rect")
+    .attr("width",d=>d.x1-d.x0).attr("height",d=>d.y1-d.y0)
+    .attr("fill",d=>d.data.color).attr("opacity",0.82).attr("stroke","#fff").attr("stroke-width",0.5)
+    .on("mouseover",(ev,d)=>showTip(ev,`<strong>${d.data.name}</strong><br>${d.data.main||''}<br>Count: <strong>${d.data.value}</strong>`))
+    .on("mousemove",moveTip).on("mouseout",hideTip);
+
+  leaf.append("text")
+    .attr("x",3).attr("y",12).style("font-size","9px").style("fill","#fff").style("font-weight","bold")
+    .text(d=>{
+      const w=d.x1-d.x0, h=d.y1-d.y0;
+      return (w>50&&h>18)?d.data.name.slice(0,Math.floor(w/6)):"";
+    });
+
+  // Category headers
+  svg.selectAll(".cat-hdr").data(root.children||[]).join("text")
+    .attr("class","cat-hdr")
+    .attr("x",d=>d.x0+4).attr("y",d=>d.y0+13)
+    .style("font-size","10px").style("font-weight","700").style("fill",d=>d.data.color)
+    .text(d=>{ const w=d.x1-d.x0; return d.data.name.length*7<w?d.data.name:d.data.name.slice(0,Math.floor(w/7))+"…"; });
+}
+
+function stackedBar(svgId, legendId, partnerData) {
+  const partners = Object.keys(partnerData);
+  if (!partners.length) return;
+
+  // Collect all categories
+  const catSet = new Set();
+  const catColorMap = {};
+  partners.forEach(p => partnerData[p].forEach(d=>{ catSet.add(d.main_category); catColorMap[d.main_category]=d.color; }));
+  const cats = [...catSet];
+
+  const W = Math.max(partners.length*80+160, 700);
+  const H = 380;
+  const m = {top:20,right:20,bottom:80,left:55};
+
+  const svg = d3.select("#"+svgId).attr("width",W).attr("height",H);
+  svg.selectAll("*").remove();
+  const g = svg.append("g").attr("transform",`translate(${m.left},${m.top})`);
+  const w=W-m.left-m.right, h=H-m.top-m.bottom;
+
+  // Build stacked data
+  const stackData = partners.map(p=>{
+    const row={partner:p}; let tot=0;
+    partnerData[p].forEach(d=>{ row[d.main_category]=d.count; tot+=d.count; });
+    cats.forEach(c=>{ if(!row[c])row[c]=0; });
+    row._total=tot||1;
+    return row;
+  });
+
+  const stack = d3.stack().keys(cats)(stackData);
+
+  const x = d3.scaleBand().domain(partners).range([0,w]).padding(0.25);
+  const y = d3.scaleLinear().domain([0,d3.max(stackData,d=>d._total)]).nice().range([h,0]);
+
+  g.append("g").attr("transform",`translate(0,${h})`).call(d3.axisBottom(x))
+    .selectAll("text").attr("transform","rotate(-35)").style("text-anchor","end").style("font-size","10px");
+  g.append("g").call(d3.axisLeft(y).ticks(5));
+  g.append("g").call(d3.axisLeft(y).ticks(5).tickSize(-w).tickFormat(""))
+    .selectAll("line").style("stroke","#eee");
+
+  stack.forEach(layer=>{
+    g.selectAll(null).data(layer).join("rect")
+      .attr("x",d=>x(d.data.partner)).attr("y",d=>y(d[1]))
+      .attr("width",x.bandwidth()).attr("height",d=>Math.max(0,y(d[0])-y(d[1])))
+      .attr("fill",catColorMap[layer.key]||"#888")
+      .on("mouseover",(ev,d)=>showTip(ev,
+        `<strong>${d.data.partner}</strong><br>${layer.key}<br>Count: <strong>${d.data[layer.key]}</strong>`))
+      .on("mousemove",moveTip).on("mouseout",hideTip);
+  });
+
+  if (legendId) {
+    const lg = document.getElementById(legendId); lg.innerHTML="";
+    cats.forEach(c=>{
+      const el=document.createElement("span"); el.className="legend-item";
+      el.innerHTML=`<span class="legend-dot" style="background:${catColorMap[c]||'#888'}"></span>${c}`;
+      lg.appendChild(el);
+    });
+  }
+}
+
+function paretoChart(svgId, data) {
+  if (!data||!data.length) return;
+  const W = Math.max(data.length*12+80, 700);
+  const H = 300;
+  const m = {top:20,right:60,bottom:40,left:50};
+
+  const svg = d3.select("#"+svgId).attr("width",W).attr("height",H);
+  svg.selectAll("*").remove();
+  const g = svg.append("g").attr("transform",`translate(${m.left},${m.top})`);
+  const w=W-m.left-m.right, h=H-m.top-m.bottom;
+
+  const total = d3.sum(data,d=>d.count);
+  let cum=0;
+  const augmented = data.map((d,i)=>{ cum+=d.count; return {...d,rank:i,cumPct:cum/total*100}; });
+
+  const x = d3.scaleLinear().domain([0,data.length]).range([0,w]);
+  const y1= d3.scaleLinear().domain([0,d3.max(data,d=>d.count)]).nice().range([h,0]);
+  const y2= d3.scaleLinear().domain([0,100]).range([h,0]);
+
+  g.append("g").attr("transform",`translate(0,${h})`).call(d3.axisBottom(x).tickSize(0).tickFormat(""));
+  g.append("g").call(d3.axisLeft(y1).ticks(5));
+  g.append("g").attr("transform",`translate(${w},0)`).call(d3.axisRight(y2).ticks(5).tickFormat(d=>d+"%"));
+
+  g.selectAll(".bar").data(augmented).join("rect")
+    .attr("x",d=>x(d.rank)+1).attr("y",d=>y1(d.count))
+    .attr("width",Math.max(w/data.length-1.5,1)).attr("height",d=>h-y1(d.count))
+    .attr("fill",d=>d.color||"#648a9e").attr("opacity",0.85)
+    .on("mouseover",(ev,d)=>showTip(ev,`<strong>${d.sublabel}</strong><br>Count: <strong>${d.count}</strong><br>Cumulative: <strong>${d.cumPct.toFixed(1)}%</strong>`))
+    .on("mousemove",moveTip).on("mouseout",hideTip);
+
+  // Cumulative line
+  const line = d3.line().x(d=>x(d.rank+0.5)).y(d=>y2(d.cumPct)).curve(d3.curveMonotoneX);
+  g.append("path").datum(augmented).attr("fill","none").attr("stroke","#C00000")
+    .attr("stroke-width",2).attr("d",line);
+
+  // 80% annotation
+  const rank80 = augmented.findIndex(d=>d.cumPct>=80);
+  if (rank80>=0) {
+    const xPos = x(rank80+0.5);
+    g.append("line").attr("x1",0).attr("x2",w).attr("y1",y2(80)).attr("y2",y2(80))
+      .attr("stroke","#C00000").attr("stroke-dasharray","5,3").attr("opacity",0.5);
+    g.append("text").attr("x",xPos+4).attr("y",y2(80)-4)
+      .style("font-size","9px").style("fill","#C00000")
+      .text(`80% at rank ${rank80+1}`);
+    g.append("line").attr("x1",xPos).attr("x2",xPos).attr("y1",0).attr("y2",h)
+      .attr("stroke","#C00000").attr("stroke-dasharray","3,2").attr("opacity",0.4);
+  }
+}
+
+function groupedHeatmap(svgId, byGroup) {
+  // Heatmap-style: rows=groups, cols=top labels, cell=count
+  const groups = Object.keys(byGroup);
+  if (!groups.length) { return; }
+
+  // Collect all labels
+  const labelCounts = {};
+  groups.forEach(g=>{ byGroup[g].forEach(d=>{ labelCounts[d.sublabel]=(labelCounts[d.sublabel]||0)+d.count; }); });
+  const allLabels = Object.entries(labelCounts).sort((a,b)=>b[1]-a[1]).slice(0,15).map(e=>e[0]);
+  if(!allLabels.length)return;
+
+  const colorMap = {};
+  groups.forEach(g=>byGroup[g].forEach(d=>{ if(!colorMap[d.sublabel])colorMap[d.sublabel]=d.color; }));
+
+  const cellH=26, cellW=Math.max(36,Math.floor(700/allLabels.length));
+  const padL=160, padT=90;
+  const W=allLabels.length*cellW+padL+20;
+  const H=groups.length*cellH+padT+20;
+  const maxCount=d3.max(groups.flatMap(g=>byGroup[g].map(d=>d.count)))||1;
+  const color=v=>d3.interpolateBlues(v/maxCount);
+
+  const svg=d3.select("#"+svgId).attr("width",W).attr("height",H);
+  svg.selectAll("*").remove();
+  const g=svg.append("g").attr("transform",`translate(${padL},${padT})`);
+
+  groups.forEach((grp,gi)=>{
+    const lookup=Object.fromEntries(byGroup[grp].map(d=>[d.sublabel,d]));
+    allLabels.forEach((lbl,li)=>{
+      const d=lookup[lbl];
+      const v=d?d.count:0;
+      g.append("rect").attr("x",li*cellW).attr("y",gi*cellH).attr("width",cellW-1).attr("height",cellH-1)
+        .attr("fill",v?color(v):"#f5f7f9").attr("rx",2)
+        .on("mouseover",ev=>showTip(ev,`<strong>${grp}</strong><br>${lbl}<br>Count: <strong>${v}</strong>`))
+        .on("mousemove",moveTip).on("mouseout",hideTip);
+      if(v) g.append("text").attr("x",li*cellW+cellW/2).attr("y",gi*cellH+cellH/2+4)
+        .attr("text-anchor","middle").style("font-size","8px").style("fill",v>maxCount*0.5?"#fff":"#333").text(v);
+    });
+    // Row label
+    svg.append("text").attr("x",padL-4).attr("y",padT+gi*cellH+cellH/2+4)
+      .attr("text-anchor","end").style("font-size","9px").style("fill","#333")
+      .text(grp.length>22?grp.slice(0,22)+"…":grp);
+  });
+
+  // Column labels
+  allLabels.forEach((lbl,li)=>{
+    svg.append("text").attr("x",padL+li*cellW+cellW/2).attr("y",padT-4)
+      .attr("text-anchor","start")
+      .attr("transform",`rotate(-45,${padL+li*cellW+cellW/2},${padT-4})`)
+      .style("font-size","9px").style("fill","#333")
+      .text(lbl.length>18?lbl.slice(0,18)+"…":lbl);
+  });
+}
+
+function peerBar(svgId, data) {
+  const {confirm,reject} = data;
+  if (!confirm && !reject) {
+    d3.select("#"+svgId).append ? null : void 0;
+    return;
+  }
+  const W = 300, H = 160;
+  const svg = d3.select("#"+svgId).attr("width",W).attr("height",H);
+  svg.selectAll("*").remove();
+  const items=[{label:"Confirmed",count:confirm,color:"#85ab86"},{label:"Rejected",count:reject,color:"#c0392b"}];
+  const x=d3.scaleBand().domain(items.map(d=>d.label)).range([60,240]).padding(0.3);
+  const y=d3.scaleLinear().domain([0,d3.max(items,d=>d.count)||1]).nice().range([120,20]);
+  items.forEach(d=>{
+    svg.append("rect").attr("x",x(d.label)).attr("y",y(d.count)).attr("width",x.bandwidth()).attr("height",120-y(d.count))
+      .attr("fill",d.color).attr("rx",4);
+    svg.append("text").attr("x",x(d.label)+x.bandwidth()/2).attr("y",y(d.count)-4)
+      .attr("text-anchor","middle").style("font-size","12px").style("font-weight","700").style("fill","#333").text(d.count);
+    svg.append("text").attr("x",x(d.label)+x.bandwidth()/2).attr("y",140)
+      .attr("text-anchor","middle").style("font-size","11px").style("fill","#666").text(d.label);
+  });
+}
+
+// ── Render by tab ─────────────────────────────────────────────────────────────
+function renderTab(tab) {
+  if (!gData) return;
+  rendered.add(tab);
+  const d = gData;
+  if (tab==="freq") {
+    barSvg("c01-svg", d.label_freq, "c01-legend");
+    barSvg("c10-svg", d.tech_label_freq, "c10-legend");
+  } else if (tab==="pies") {
+    pieChart("c02-svg", d.target_user_freq, "sublabel", "count");
+    pieChart("c03-svg", d.concept_freq, "concept", "count");
+  } else if (tab==="net") {
+    networkChart("c04-svg","c04-legend", d.label_freq, d.cooccurrence);
+    networkChart("c11-svg","c11-legend", d.tech_label_freq, d.tech_cooccurrence);
+  } else if (tab==="heat") {
+    heatmap("c05-svg", d.label_freq, 20);
+  } else if (tab==="tree") {
+    treemap("c06-svg", d.label_freq, 3);
+    treemap("c12-svg", d.tech_label_freq, 2);
+  } else if (tab==="partner") {
+    stackedBar("c07-svg","c07-legend", d.partner_main_freq);
+  } else if (tab==="pareto") {
+    paretoChart("c08-svg", d.label_freq);
+    paretoChart("c13-svg", d.tech_label_freq);
+  } else if (tab==="breakdown") {
+    groupedHeatmap("c14-svg", d.user_type_tech_freq);
+    groupedHeatmap("c15-svg", d.concept_tech_freq);
+    peerBar("c-peer-svg", d.peer_review);
+  }
+}
+
+// ── Load + auto-refresh ───────────────────────────────────────────────────────
+async function loadData() {
+  try {
+    const resp = await fetch("/infograph/data");
+    if (!resp.ok) return;
+    gData = await resp.json();
+    const total = gData.total_labels || 0;
+    const stories = gData.total_stories || 0;
+    document.getElementById("ig-status").textContent =
+      `${total} label${total!==1?"s":""} across ${stories} stories — last refreshed ${new Date().toLocaleTimeString()}`;
+    rendered.clear();
+    renderTab(activeTab);
+  } catch(e) {
+    document.getElementById("ig-status").textContent = "Error loading data";
+  }
+}
+
+loadData();
+// Refresh every 5 minutes by default
+setInterval(loadData, 300000);
+</script>
 {% endblock %}
