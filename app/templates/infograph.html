@@ -704,7 +704,6 @@ async function loadData() {
 }
 
 loadData();
-// Refresh every 5 minutes by default
-setInterval(loadData, 300000);
+setInterval(loadData, {{ chart_refresh_ms }});
 </script>
 {% endblock %}

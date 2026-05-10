@@ -51,7 +51,19 @@ async def infograph(request: Request):
     user = await get_current_user(request)
     if not user:
         return RedirectResponse(url="/login", status_code=302)
-    return templates.TemplateResponse(request, "infograph.html", {"user": user})
+
+    async with SessionLocal() as db:
+        res = await db.execute(
+            select(ReviewSession).order_by(ReviewSession.started_at.desc())
+        )
+        session = res.scalars().first()
+
+    refresh_secs = (session.chart_refresh_secs or 300) if session else 300
+
+    return templates.TemplateResponse(
+        request, "infograph.html",
+        {"user": user, "chart_refresh_ms": refresh_secs * 1000},
+    )
 
 
 @router.get("/infograph/data")
