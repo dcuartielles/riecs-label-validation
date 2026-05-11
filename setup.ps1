@@ -26,7 +26,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# -- Helpers ------------------------------------------------------------
 
 function Write-Step { param([string]$Msg)
     Write-Host "`n==> $Msg" -ForegroundColor Cyan }
@@ -55,10 +55,10 @@ function Scoop-Install { param([string]$Pkg)
     }
 }
 
-# ── 0. Admin check ────────────────────────────────────────────────────────────
+# -- 0. Admin check ------------------------------------------------------------
 Require-Admin
 
-# ── 1. Scoop ──────────────────────────────────────────────────────────────────
+# -- 1. Scoop ------------------------------------------------------------
 Write-Step "Scoop package manager"
 if (-not (Get-Command scoop -ErrorAction SilentlyContinue)) {
     Write-Host "    Installing Scoop..."
@@ -70,7 +70,7 @@ if (-not (Get-Command scoop -ErrorAction SilentlyContinue)) {
 }
 Write-OK "Scoop ready"
 
-# ── 2. Core packages ──────────────────────────────────────────────────────────
+# -- 2. Core packages ------------------------------------------------------------
 Write-Step "Core packages (git, gh, python, nodejs, nssm, ngrok)"
 scoop bucket add extras 2>$null
 foreach ($pkg in @("git", "gh", "python", "nodejs", "nssm", "ngrok")) {
@@ -80,7 +80,7 @@ foreach ($pkg in @("git", "gh", "python", "nodejs", "nssm", "ngrok")) {
 $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH","Machine") + ";" +
             [System.Environment]::GetEnvironmentVariable("PATH","User")
 
-# ── 3. Claude Code (npm global) ───────────────────────────────────────────────
+# -- 3. Claude Code (npm global) ------------------------------------------------------------
 Write-Step "Claude Code CLI"
 if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
     Write-Host "    Installing Claude Code..."
@@ -88,7 +88,7 @@ if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
 }
 Write-OK "Claude Code ready"
 
-# ── 4. GitHub auth + clone ────────────────────────────────────────────────────
+# -- 4. GitHub auth + clone ------------------------------------------------------------
 Write-Step "GitHub authentication"
 $ghCheck = gh auth status 2>&1
 if ($LASTEXITCODE -ne 0) {
@@ -99,14 +99,14 @@ Write-OK "GitHub authenticated"
 
 Write-Step "Cloning repository to $InstallDir"
 if (Test-Path $InstallDir) {
-    Write-Warn "$InstallDir already exists — skipping clone (will use as-is)"
+    Write-Warn "$InstallDir already exists - skipping clone (will use as-is)"
 } else {
     gh repo clone dcuartielles/riecs-label-validation $InstallDir
     Write-OK "Repository cloned"
 }
 Set-Location $InstallDir
 
-# ── 5. Python virtual environment ────────────────────────────────────────────
+# -- 5. Python virtual environment ------------------------------------------------------------
 Write-Step "Python virtual environment + dependencies"
 $venvDir = Join-Path $InstallDir ".venv"
 $pyExe   = Join-Path $venvDir "Scripts\python.exe"
@@ -122,7 +122,7 @@ if (-not (Test-Path $venvDir)) {
 & $pipExe install -r requirements.txt -q
 Write-OK "Python dependencies installed"
 
-# ── 6. .env config ────────────────────────────────────────────────────────────
+# -- 6. .env config ------------------------------------------------------------
 Write-Step "Environment configuration (.env)"
 $envFile = Join-Path $InstallDir ".env"
 
@@ -142,15 +142,15 @@ NGROK_DOMAIN=$ngrokDomain
 "@ | Set-Content $envFile -Encoding UTF8
     Write-OK ".env written"
 } else {
-    Write-Warn ".env already exists — reading existing values"
+    Write-Warn ".env already exists - reading existing values"
     $envLines    = Get-Content $envFile
     $adminEmail  = ($envLines | Where-Object { $_ -match "^ADMIN_EMAIL=" })  -replace "^ADMIN_EMAIL=",  ""
     $ngrokDomain = ($envLines | Where-Object { $_ -match "^NGROK_DOMAIN=" }) -replace "^NGROK_DOMAIN=", ""
     $ngrokToken  = Read-Host "ngrok auth token (needed for service registration)"
 }
 
-# ── 7. ngrok config ───────────────────────────────────────────────────────────
-Write-Step "ngrok — fixed domain $ngrokDomain"
+# -- 7. ngrok config ------------------------------------------------------------
+Write-Step "ngrok - fixed domain $ngrokDomain"
 ngrok config add-authtoken $ngrokToken
 
 # Append the tunnel stanza only if it isn't already there
@@ -174,7 +174,7 @@ if (-not (Test-Path $ngrokCfgFile) -or -not (Select-String -Path $ngrokCfgFile -
     Write-OK "Tunnel stanza already present"
 }
 
-# ── 8. Import data ────────────────────────────────────────────────────────────
+# -- 8. Import data ------------------------------------------------------------
 Write-Step "Data import"
 $inputDir = Join-Path $InstallDir "input_data"
 if (Test-Path $inputDir) {
@@ -185,12 +185,12 @@ if (Test-Path $inputDir) {
     Write-Warn "  $pyExe scripts\import_data.py"
 }
 
-# ── 9. Admin user ─────────────────────────────────────────────────────────────
+# -- 9. Admin user ------------------------------------------------------------
 Write-Step "Admin user ($adminEmail)"
 & $pyExe scripts\create_admin.py $adminEmail
 Write-OK "Admin account ready"
 
-# ── 10. Windows service — FastAPI server (NSSM) ───────────────────────────────
+# -- 10. Windows service - FastAPI server (NSSM) ------------------------------------------------------------
 Write-Step "Windows service: RIECSServer"
 $uvicornExe = Join-Path $venvDir "Scripts\uvicorn.exe"
 
@@ -206,10 +206,10 @@ if (-not $svcExists) {
     nssm set    RIECSServer AppRotateBytes      10485760   # 10 MB log rotation
     Write-OK "RIECSServer service installed"
 } else {
-    Write-Warn "RIECSServer already registered — skipping (run 'nssm edit RIECSServer' to reconfigure)"
+    Write-Warn "RIECSServer already registered - skipping (run 'nssm edit RIECSServer' to reconfigure)"
 }
 
-# ── 11. Windows service — ngrok tunnel (NSSM) ────────────────────────────────
+# -- 11. Windows service - ngrok tunnel (NSSM) ------------------------------------------------------------
 Write-Step "Windows service: RIECSNgrok"
 $ngrokExe = (Get-Command ngrok).Source
 
@@ -223,10 +223,10 @@ if (-not $ngrokSvcExists) {
     nssm set    RIECSNgrok AppRotateBytes 5242880   # 5 MB
     Write-OK "RIECSNgrok service installed"
 } else {
-    Write-Warn "RIECSNgrok already registered — skipping"
+    Write-Warn "RIECSNgrok already registered - skipping"
 }
 
-# ── 12. Task Scheduler — daily export at 23:50 ────────────────────────────────
+# -- 12. Task Scheduler - daily export at 23:50 ------------------------------------------------------------
 Write-Step "Task Scheduler: daily export"
 $taskName = "RIECSDailyExport"
 $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
@@ -249,10 +249,10 @@ if (-not $existing) {
         -Force | Out-Null
     Write-OK "Task '$taskName' registered (runs daily at 23:50)"
 } else {
-    Write-Warn "Task '$taskName' already exists — skipping"
+    Write-Warn "Task '$taskName' already exists - skipping"
 }
 
-# ── 13. Start services ────────────────────────────────────────────────────────
+# -- 13. Start services ------------------------------------------------------------
 Write-Step "Starting services"
 nssm start RIECSServer 2>$null
 nssm start RIECSNgrok  2>$null
@@ -260,19 +260,19 @@ Start-Sleep -Seconds 3
 
 $serverRunning = (nssm status RIECSServer) -match "SERVICE_RUNNING"
 $ngrokRunning  = (nssm status RIECSNgrok)  -match "SERVICE_RUNNING"
-if ($serverRunning) { Write-OK "RIECSServer is running" } else { Write-Warn "RIECSServer did not start — check $InstallDir\server.log" }
-if ($ngrokRunning)  { Write-OK "RIECSNgrok  is running" } else { Write-Warn "RIECSNgrok did not start  — check $InstallDir\ngrok.log" }
+if ($serverRunning) { Write-OK "RIECSServer is running" } else { Write-Warn "RIECSServer did not start - check $InstallDir\server.log" }
+if ($ngrokRunning)  { Write-OK "RIECSNgrok  is running" } else { Write-Warn "RIECSNgrok did not start  - check $InstallDir\ngrok.log" }
 
-# ── Summary ───────────────────────────────────────────────────────────────────
+# -- Summary ------------------------------------------------------------
 Write-Host ""
-Write-Host "╔══════════════════════════════════════════════════════╗" -ForegroundColor Green
-Write-Host "║  Setup complete                                      ║" -ForegroundColor Green
-Write-Host "╠══════════════════════════════════════════════════════╣" -ForegroundColor Green
-Write-Host "║  Local :  http://localhost:8000                      ║" -ForegroundColor Green
-Write-Host "║  Tunnel:  https://$($ngrokDomain.PadRight(38))║" -ForegroundColor Green
-Write-Host "║  Admin :  $($adminEmail.PadRight(42))║" -ForegroundColor Green
-Write-Host "║  Logs  :  $InstallDir\server.log" -ForegroundColor Green
-Write-Host "╚══════════════════════════════════════════════════════╝" -ForegroundColor Green
+Write-Host "+======================================================+" -ForegroundColor Green
+Write-Host "|  Setup complete                                      |" -ForegroundColor Green
+Write-Host "+======================================================+" -ForegroundColor Green
+Write-Host "|  Local :  http://localhost:8000                      |" -ForegroundColor Green
+Write-Host "|  Tunnel:  https://$($ngrokDomain.PadRight(38))|" -ForegroundColor Green
+Write-Host "|  Admin :  $($adminEmail.PadRight(42))|" -ForegroundColor Green
+Write-Host "|  Logs  :  $InstallDir\server.log" -ForegroundColor Green
+Write-Host "+======================================================+" -ForegroundColor Green
 Write-Host ""
 Write-Host "Service management:"
 Write-Host "  nssm start|stop|restart RIECSServer"
