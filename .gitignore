@@ -7,6 +7,9 @@ input_data/
 # Runtime database (recreate with scripts/import_data.py)
 *.db
 
+# Workshop export files
+output/
+
 # Python
 __pycache__/
 *.pyc

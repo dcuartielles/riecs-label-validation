@@ -345,8 +345,8 @@ def build_stats_conflicts_sheet(wb_out, groups, all_stories,
             for g in groups_with_data
         ]
         tu_conflict  = len(tu_vals) > 1
-        lbl_union    = set.union(*lbl_sets) if lbl_sets else set()
-        lbl_intersect = set.intersection(*lbl_sets) if lbl_sets else set()
+        lbl_union    = set.union(*[set(s) for s in lbl_sets]) if lbl_sets else set()
+        lbl_intersect = set.intersection(*[set(s) for s in lbl_sets]) if lbl_sets else set()
         lbl_conflict = len(lbl_union) > len(lbl_intersect)
 
         if not (tu_conflict or lbl_conflict):
