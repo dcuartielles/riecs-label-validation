@@ -1,7 +1,10 @@
 import json
 import random
+import shutil
+import zipfile
 from app.templates import templates
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -219,8 +222,24 @@ async def end_session(request: Request):
     async with SessionLocal() as db:
         session = await get_active_session(db)
         if session:
+            # Generate a final export snapshot before closing the session
+            from app.routers.export import generate_workbook
+            session_dir = Path("output") / f"session_{session.id}"
+            session_dir.mkdir(parents=True, exist_ok=True)
+            wb, _ = await generate_workbook(db, session.id)
+            stamp = datetime.utcnow().strftime("%Y%m%d")
+            wb.save(session_dir / f"{stamp}_label_results_session_{session.id}_final.xlsx")
+
             session.ended_at = datetime.utcnow()
             await db.commit()
+
+            # Zip all daily exports for this session, then remove the folder
+            zip_path = Path("output") / f"session_{session.id}.zip"
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                for f in sorted(session_dir.rglob("*")):
+                    if f.is_file():
+                        zf.write(f, f.relative_to(session_dir.parent))
+            shutil.rmtree(session_dir)
 
     return RedirectResponse(url="/admin", status_code=302)
 

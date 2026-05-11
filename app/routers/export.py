@@ -391,6 +391,139 @@ def build_stats_conflicts_sheet(wb_out, groups, all_stories,
     return ws
 
 
+async def generate_workbook(
+    db,
+    session_id: int | None = None,
+    group_ids: list[int] | None = None,
+) -> tuple[openpyxl.Workbook, "ReviewSession | None"]:
+    """Build the export workbook from an open DB session.
+
+    Callable from the HTTP route, the session-end handler, and the daily
+    export script without duplicating any data-loading logic.
+    group_ids: if given, restrict to those groups (non-admin user view).
+    Returns (workbook, review_session).
+    """
+    groups = (await db.execute(select(Group))).scalars().all()
+    if group_ids is not None:
+        groups = [g for g in groups if g.id in group_ids]
+
+    if session_id:
+        rev_session = await db.get(ReviewSession, session_id)
+    else:
+        result = await db.execute(
+            select(ReviewSession).order_by(ReviewSession.started_at.desc())
+        )
+        rev_session = result.scalars().first()
+
+    all_stories = (await db.execute(
+        select(UserStory).order_by(UserStory.story_id)
+    )).scalars().all()
+    story_by_id = {s.id: s for s in all_stories}
+
+    all_users = (await db.execute(select(User))).scalars().all()
+    uid_name = {u.id: u.name for u in all_users}
+    gid_name = {g.id: g.name for g in groups}
+
+    per_group_added:     dict[int, dict[int, list]] = {}
+    per_group_mandatory: dict[int, dict[int, MandatoryClassification]] = {}
+    per_group_rejection: dict[int, dict[int, StoryRejection]] = {}
+    per_group_relevance: dict[int, dict[int, StoryRelevance]] = {}
+
+    for group in groups:
+        gid = group.id
+        added_filter = [User.group_id == gid]
+        if rev_session:
+            added_filter.append(AddedLabel.session_id == rev_session.id)
+
+        added_result = await db.execute(
+            select(AddedLabel)
+            .join(User, AddedLabel.user_id == User.id)
+            .where(*added_filter)
+            .options(selectinload(AddedLabel.taxonomy_label))
+        )
+        added_labels = added_result.scalars().all()
+        added_map: dict[int, list] = {}
+        for al in added_labels:
+            entry = {
+                "label":    al.taxonomy_label.label    if al.taxonomy_label else (al.free_text or ""),
+                "sublabel": al.taxonomy_label.sublabel if al.taxonomy_label else "",
+                "note":     al.note or "",
+            }
+            added_map.setdefault(al.story_id, []).append(entry)
+        per_group_added[gid] = added_map
+
+        mc_filter = [MandatoryClassification.group_id == gid]
+        if rev_session:
+            mc_filter.append(MandatoryClassification.session_id == rev_session.id)
+        mc_rows = (await db.execute(select(MandatoryClassification).where(*mc_filter))).scalars().all()
+        per_group_mandatory[gid] = {mc.story_id: mc for mc in mc_rows}
+
+        rej_filter = [StoryRejection.group_id == gid]
+        if rev_session:
+            rej_filter.append(StoryRejection.session_id == rev_session.id)
+        rej_rows = (await db.execute(select(StoryRejection).where(*rej_filter))).scalars().all()
+        per_group_rejection[gid] = {r.story_id: r for r in rej_rows}
+
+        rel_filter = [StoryRelevance.group_id == gid]
+        if rev_session:
+            rel_filter.append(StoryRelevance.session_id == rev_session.id)
+        rel_rows = (await db.execute(select(StoryRelevance).where(*rel_filter))).scalars().all()
+        per_group_relevance[gid] = {r.story_id: r for r in rel_rows}
+
+    assigned_counts: dict[int, int] = {}
+    for group in groups:
+        res = await db.execute(
+            select(func.count(GroupAssignment.id))
+            .where(GroupAssignment.group_id == group.id)
+        )
+        assigned_counts[group.id] = res.scalar() or 0
+
+    wb_out = openpyxl.Workbook()
+    wb_out.remove(wb_out.active)
+
+    for group in groups:
+        gid = group.id
+        assigned_result = await db.execute(
+            select(GroupAssignment.story_id)
+            .where(GroupAssignment.group_id == gid)
+            .order_by(GroupAssignment.position)
+        )
+        assigned_ids = [r for r, in assigned_result.all()]
+        partner_stories = (
+            [story_by_id[sid] for sid in assigned_ids if sid in story_by_id]
+            if assigned_ids else all_stories
+        )
+        max_labels_group = max(
+            (len(lbls) for sid, lbls in per_group_added[gid].items()),
+            default=1,
+        )
+        build_partner_sheet(
+            wb_out, group.name, partner_stories,
+            per_group_added[gid], per_group_mandatory[gid],
+            per_group_rejection[gid], per_group_relevance[gid],
+            max_labels_group,
+        )
+
+    build_summary_sheet(
+        wb_out, groups, all_stories,
+        per_group_added, per_group_mandatory,
+        per_group_rejection, per_group_relevance,
+    )
+    build_rejection_relevance_sheet(
+        wb_out, groups, all_stories,
+        per_group_rejection, per_group_relevance,
+        gid_name, uid_name,
+    )
+    build_stats_conflicts_sheet(
+        wb_out, groups, all_stories,
+        per_group_added, per_group_mandatory,
+        per_group_rejection, per_group_relevance,
+        assigned_counts,
+    )
+
+    return wb_out, rev_session
+
+
 @router.get("/export")
 async def export_all(request: Request, session_id: int | None = None):
     user = await get_current_user(request)
@@ -398,153 +531,8 @@ async def export_all(request: Request, session_id: int | None = None):
         return RedirectResponse(url="/login", status_code=302)
 
     async with SessionLocal() as db:
-        groups = (await db.execute(select(Group))).scalars().all()
-        if not user.is_admin:
-            groups = [g for g in groups if g.id == user.group_id]
-
-        # Resolve session
-        if session_id:
-            rev_session = await db.get(ReviewSession, session_id)
-        else:
-            result = await db.execute(
-                select(ReviewSession).order_by(ReviewSession.started_at.desc())
-            )
-            rev_session = result.scalars().first()
-
-        # Load all stories
-        all_stories = (await db.execute(
-            select(UserStory).order_by(UserStory.story_id)
-        )).scalars().all()
-        story_by_id = {s.id: s for s in all_stories}
-
-        # User name lookup for actor attribution
-        all_users = (await db.execute(select(User))).scalars().all()
-        uid_name = {u.id: u.name for u in all_users}
-        gid_name = {g.id: g.name for g in groups}
-
-        # Per-group data maps: group_id → {story_id → data}
-        per_group_added:     dict[int, dict[int, list]] = {}
-        per_group_mandatory: dict[int, dict[int, MandatoryClassification]] = {}
-        per_group_rejection: dict[int, dict[int, StoryRejection]] = {}
-        per_group_relevance: dict[int, dict[int, StoryRelevance]] = {}
-
-        for group in groups:
-            gid = group.id
-            added_filter = [User.group_id == gid]
-            if rev_session:
-                added_filter.append(AddedLabel.session_id == rev_session.id)
-
-            added_result = await db.execute(
-                select(AddedLabel)
-                .join(User, AddedLabel.user_id == User.id)
-                .where(*added_filter)
-                .options(selectinload(AddedLabel.taxonomy_label))
-            )
-            added_labels = added_result.scalars().all()
-            added_map: dict[int, list] = {}
-            for al in added_labels:
-                entry = {
-                    "label":    al.taxonomy_label.label    if al.taxonomy_label else (al.free_text or ""),
-                    "sublabel": al.taxonomy_label.sublabel if al.taxonomy_label else "",
-                    "note":     al.note or "",
-                }
-                added_map.setdefault(al.story_id, []).append(entry)
-            per_group_added[gid] = added_map
-
-            mc_filter = [MandatoryClassification.group_id == gid]
-            if rev_session:
-                mc_filter.append(MandatoryClassification.session_id == rev_session.id)
-            mc_rows = (await db.execute(select(MandatoryClassification).where(*mc_filter))).scalars().all()
-            per_group_mandatory[gid] = {mc.story_id: mc for mc in mc_rows}
-
-            rej_filter = [StoryRejection.group_id == gid]
-            if rev_session:
-                rej_filter.append(StoryRejection.session_id == rev_session.id)
-            rej_rows = (await db.execute(select(StoryRejection).where(*rej_filter))).scalars().all()
-            per_group_rejection[gid] = {r.story_id: r for r in rej_rows}
-
-            rel_filter = [StoryRelevance.group_id == gid]
-            if rev_session:
-                rel_filter.append(StoryRelevance.session_id == rev_session.id)
-            rel_rows = (await db.execute(select(StoryRelevance).where(*rel_filter))).scalars().all()
-            per_group_relevance[gid] = {r.story_id: r for r in rel_rows}
-
-        # Count stories assigned per group (for stats sheet)
-        assigned_counts: dict[int, int] = {}
-        for group in groups:
-            res = await db.execute(
-                select(func.count(GroupAssignment.id))
-                .where(GroupAssignment.group_id == group.id)
-            )
-            assigned_counts[group.id] = res.scalar() or 0
-
-        # Global max labels (for column alignment)
-        max_labels_global = max(
-            (len(lbls) for gid in per_group_added for sid, lbls in per_group_added[gid].items()),
-            default=0,
-        )
-        max_labels_global = max(max_labels_global, 1)
-
-        wb_out = openpyxl.Workbook()
-        wb_out.remove(wb_out.active)
-
-        # Per-partner sheets
-        for group in groups:
-            gid = group.id
-
-            # Stories assigned to this group (or all if no session assignments)
-            assigned_result = await db.execute(
-                select(GroupAssignment.story_id)
-                .where(GroupAssignment.group_id == gid)
-                .order_by(GroupAssignment.position)
-            )
-            assigned_ids = [r for r, in assigned_result.all()]
-            if assigned_ids:
-                partner_stories = [story_by_id[sid] for sid in assigned_ids if sid in story_by_id]
-            else:
-                partner_stories = all_stories
-
-            max_labels_group = max(
-                (len(lbls) for sid, lbls in per_group_added[gid].items()),
-                default=1,
-            )
-
-            build_partner_sheet(
-                wb_out,
-                group.name,
-                partner_stories,
-                per_group_added[gid],
-                per_group_mandatory[gid],
-                per_group_rejection[gid],
-                per_group_relevance[gid],
-                max_labels_group,
-            )
-
-        # Summary sheet (all stories, all groups)
-        build_summary_sheet(
-            wb_out,
-            groups,
-            all_stories,
-            per_group_added,
-            per_group_mandatory,
-            per_group_rejection,
-            per_group_relevance,
-        )
-
-        # Rejections & Relevance sheet
-        build_rejection_relevance_sheet(
-            wb_out, groups, all_stories,
-            per_group_rejection, per_group_relevance,
-            gid_name, uid_name,
-        )
-
-        # Statistics & Conflicts sheet
-        build_stats_conflicts_sheet(
-            wb_out, groups, all_stories,
-            per_group_added, per_group_mandatory,
-            per_group_rejection, per_group_relevance,
-            assigned_counts,
-        )
+        group_ids = None if user.is_admin else [user.group_id]
+        wb_out, rev_session = await generate_workbook(db, session_id, group_ids)
 
     session_suffix = f"session_{rev_session.id}" if rev_session else "all"
     filename = f"label_results_{session_suffix}.xlsx"
