@@ -39,19 +39,39 @@ async def get_active_session(db) -> ReviewSession | None:
 
 def _assign_stories(story_ids: list[int], group_count: int,
                     overlap_pct: float, seed: int) -> dict[int, list[int]]:
+    """Assign stories to groups with pairwise overlap.
+
+    Overlap stories are split into group_count slices, one per adjacent pair
+    (ring topology: 0-1, 1-2, ..., (G-1)-0).  Each group receives its unique
+    slice plus the two overlap slices from its left and right neighbours, so
+    every overlap story is reviewed by exactly two groups.
+    """
     rng = random.Random(seed)
     ids = story_ids[:]
     rng.shuffle(ids)
     n = len(ids)
-    n_shared = round(n * overlap_pct)
-    shared = ids[:n_shared]
-    unique_pool = ids[n_shared:]
+
+    n_overlap = round(n * overlap_pct)
+    overlap_pool = ids[:n_overlap]
+    unique_pool  = ids[n_overlap:]
+
+    # Distribute overlap stories round-robin across the group_count pairs
+    pair_slices: list[list[int]] = [[] for _ in range(group_count)]
+    for i, sid in enumerate(overlap_pool):
+        pair_slices[i % group_count].append(sid)
+
+    # Unique stories divided equally among groups
     unique_per_group = max(1, (len(unique_pool) + group_count - 1) // group_count)
+
     assignments: dict[int, list[int]] = {}
     for g in range(group_count):
-        start = g * unique_per_group
-        end = min(start + unique_per_group, len(unique_pool))
-        assignments[g] = shared + unique_pool[start:end]
+        u_start = g * unique_per_group
+        u_end   = min(u_start + unique_per_group, len(unique_pool))
+        unique  = unique_pool[u_start:u_end]
+        # Pair to the left: (g-1, g);  pair to the right: (g, g+1)
+        left_slice  = pair_slices[(g - 1) % group_count]
+        right_slice = pair_slices[g]
+        assignments[g] = unique + left_slice + right_slice
     return assignments
 
 

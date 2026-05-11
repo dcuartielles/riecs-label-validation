@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from sqlalchemy import select, delete, func
 from app.database import SessionLocal
 from app.models import (
-    AddedLabel, Group, GroupAssignment,
+    AddedLabel, AddedLabelDecision, Group, GroupAssignment,
     MandatoryClassification, Session as ReviewSession,
     StoryRejection, StoryRelevance, TaxonomyLabel, User, UserStory,
 )
@@ -87,19 +87,31 @@ FAKE_USERS_BY_GROUP: dict[int, list[tuple[str, str]]] = {
 # ── Story-assignment replication (identical to admin.py) ──────────────────────
 def _assign_stories(story_ids: list[int], group_count: int,
                     overlap_pct: float, seed: int) -> dict[int, list[int]]:
+    """Pairwise overlap: each overlap story is reviewed by exactly two
+    adjacent groups (ring topology).  Must stay identical to admin.py."""
     rng = random.Random(seed)
     ids = story_ids[:]
     rng.shuffle(ids)
     n = len(ids)
-    n_shared = round(n * overlap_pct)
-    shared = ids[:n_shared]
-    unique_pool = ids[n_shared:]
+
+    n_overlap    = round(n * overlap_pct)
+    overlap_pool = ids[:n_overlap]
+    unique_pool  = ids[n_overlap:]
+
+    pair_slices: list[list[int]] = [[] for _ in range(group_count)]
+    for i, sid in enumerate(overlap_pool):
+        pair_slices[i % group_count].append(sid)
+
     unique_per_group = max(1, (len(unique_pool) + group_count - 1) // group_count)
+
     assignments: dict[int, list[int]] = {}
     for g in range(group_count):
-        start = g * unique_per_group
-        end = min(start + unique_per_group, len(unique_pool))
-        assignments[g] = shared + unique_pool[start:end]
+        u_start = g * unique_per_group
+        u_end   = min(u_start + unique_per_group, len(unique_pool))
+        unique  = unique_pool[u_start:u_end]
+        left_slice  = pair_slices[(g - 1) % group_count]
+        right_slice = pair_slices[g]
+        assignments[g] = unique + left_slice + right_slice
     return assignments
 
 
@@ -523,6 +535,49 @@ async def save_real_users():
     print(f"Saved {len(data)} real users to {BACKUP_FILE}")
 
 
+MASK_NAMES = [
+    ("Alicia Vega Montero",    "a.vega@example.org"),
+    ("Brendan O'Sullivan",     "b.osullivan@example.org"),
+    ("Chiara Lombardi",        "c.lombardi@example.org"),
+    ("Dimitri Papadakis",      "d.papadakis@example.org"),
+    ("Elena Kovacevic",        "e.kovacevic@example.org"),
+    ("Fabio Marchetti",        "f.marchetti@example.org"),
+    ("Greta Lindberg",         "g.lindberg@example.org"),
+    ("Henrik Svensson",        "h.svensson@example.org"),
+    ("Ines Carvalho",          "i.carvalho@example.org"),
+    ("Jakub Novotny",          "j.novotny@example.org"),
+    ("Katarzyna Wisniewska",   "k.wisniewska@example.org"),
+    ("Lukas Braun",            "l.braun@example.org"),
+    ("Miriam Gutierrez",       "m.gutierrez@example.org"),
+    ("Niko Virtanen",          "n.virtanen@example.org"),
+    ("Olivia Fontaine",        "o.fontaine@example.org"),
+    ("Petra Blazevic",         "p.blazevic@example.org"),
+    ("Quentin Renard",         "q.renard@example.org"),
+    ("Raluca Ionescu",         "r.ionescu@example.org"),
+]
+
+
+async def mask_real_users():
+    """Replace real user names and emails with realistic fake ones for screenshots."""
+    if not BACKUP_FILE.exists():
+        print("ERROR: no backup file found — run --save-users first")
+        return
+
+    async with SessionLocal() as db:
+        real_users = (await db.execute(
+            select(User).where(~User.email.like(f"%{SIM_MARKER}"))
+            .order_by(User.id)
+        )).scalars().all()
+
+        for i, u in enumerate(real_users):
+            name, email = MASK_NAMES[i % len(MASK_NAMES)]
+            u.name  = name
+            u.email = email
+
+        await db.commit()
+    print(f"Masked {len(real_users)} real users with fake names/emails")
+
+
 async def create_fake_users() -> dict[int, list[int]]:
     """Insert fake users; return {group_id: [user_id, ...]}."""
     group_to_uids: dict[int, list[int]] = {}
@@ -716,10 +771,85 @@ async def run_labels(session_id: int, phase: int):
     print(f"\nPhase {phase} complete — {total_added} label records added")
 
 
+async def add_peer_reviews(session_id: int, pct: float = 0.05):
+    """
+    For each group, take pct% of stories that already have AddedLabel records
+    from phase 1, then have a different fake user in the same group confirm/reject
+    each label on those stories (80% confirm, 20% reject).
+    """
+    async with SessionLocal() as db:
+        groups = (await db.execute(select(Group))).scalars().all()
+        total_decisions = 0
+
+        for group in groups:
+            gid = group.id
+
+            # Fake users in this group
+            fake_uids = (await db.execute(
+                select(User.id)
+                .where(User.group_id == gid, User.email.like("%@simulation.fake"))
+            )).scalars().all()
+            if len(fake_uids) < 2:
+                continue
+
+            # Stories with labels from this group in this session
+            story_ids = list(dict.fromkeys((await db.execute(
+                select(AddedLabel.story_id)
+                .join(User, AddedLabel.user_id == User.id)
+                .where(User.group_id == gid, AddedLabel.session_id == session_id)
+                .order_by(AddedLabel.story_id)
+            )).scalars().all()))
+
+            n_review = max(1, round(len(story_ids) * pct))
+            review_sids = SIM_RNG.sample(story_ids, min(n_review, len(story_ids)))
+
+            for sid in review_sids:
+                # Labels added by any fake user in this group for this story
+                al_rows = (await db.execute(
+                    select(AddedLabel)
+                    .join(User, AddedLabel.user_id == User.id)
+                    .where(
+                        User.group_id == gid,
+                        AddedLabel.session_id == session_id,
+                        AddedLabel.story_id == sid,
+                    )
+                )).scalars().all()
+
+                for al in al_rows:
+                    # Reviewer must be different from the author
+                    reviewer_pool = [u for u in fake_uids if u != al.user_id]
+                    if not reviewer_pool:
+                        continue
+                    reviewer_uid = SIM_RNG.choice(reviewer_pool)
+                    decision = "confirm" if SIM_RNG.random() < 0.80 else "reject"
+
+                    existing = (await db.execute(
+                        select(AddedLabelDecision).where(
+                            AddedLabelDecision.session_id == session_id,
+                            AddedLabelDecision.user_id == reviewer_uid,
+                            AddedLabelDecision.added_label_id == al.id,
+                        )
+                    )).scalar_one_or_none()
+                    if not existing:
+                        db.add(AddedLabelDecision(
+                            session_id=session_id,
+                            user_id=reviewer_uid,
+                            added_label_id=al.id,
+                            decision=decision,
+                        ))
+                        total_decisions += 1
+
+            await db.commit()
+            print(f"  Group {gid:2d} ({group.name[:30]:<30}): "
+                  f"reviewed {len(review_sids)} stories")
+
+    print(f"\nPeer reviews complete — {total_decisions} decision records added")
+
+
 async def reset_db():
     """Clear all session data and restore real users from backup."""
     async with SessionLocal() as db:
-        for model in [AddedLabel, MandatoryClassification,
+        for model in [AddedLabelDecision, AddedLabel, MandatoryClassification,
                       StoryRejection, StoryRelevance, ReviewSession]:
             await db.execute(delete(model))
 
@@ -766,6 +896,7 @@ async def status():
         labels   = (await db.execute(select(func.count(AddedLabel.id)))).scalar()
         mcs      = (await db.execute(select(func.count(MandatoryClassification.id)))).scalar()
         rejs     = (await db.execute(select(func.count(StoryRejection.id)))).scalar()
+        decs     = (await db.execute(select(func.count(AddedLabelDecision.id)))).scalar()
 
     print(f"Users:          {users} total ({fake} fake)")
     print(f"Sessions:       {len(sessions)}")
@@ -774,6 +905,7 @@ async def status():
     print(f"AddedLabels:    {labels}")
     print(f"MandatoryClass: {mcs}")
     print(f"Rejections:     {rejs}")
+    print(f"PeerReviews:    {decs}")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -782,6 +914,10 @@ async def main():
     parser.add_argument("--save-users", action="store_true", help="Backup real users")
     parser.add_argument("--phase", type=int, choices=[1, 2],
                         help="Run labelling phase 1 (50%%) or phase 2 (remaining 50%%)")
+    parser.add_argument("--peer-reviews", action="store_true",
+                        help="Add peer review decisions (5%% of stories per group)")
+    parser.add_argument("--mask-users", action="store_true",
+                        help="Replace real user names/emails with placeholders (for screenshots)")
     parser.add_argument("--reset", action="store_true", help="Clear simulation data")
     parser.add_argument("--status", action="store_true", help="Show DB state")
     args = parser.parse_args()
@@ -804,6 +940,19 @@ async def main():
             print("No session found — run --phase 1 first")
             sys.exit(1)
         await run_labels(sess.id, phase=2)
+
+    elif args.peer_reviews:
+        async with SessionLocal() as db:
+            sess = (await db.execute(
+                select(ReviewSession).order_by(ReviewSession.started_at.desc())
+            )).scalar_one_or_none()
+        if not sess:
+            print("No session found — run --phase 1 first")
+            sys.exit(1)
+        await add_peer_reviews(sess.id)
+
+    elif args.mask_users:
+        await mask_real_users()
 
     elif args.reset:
         await reset_db()
