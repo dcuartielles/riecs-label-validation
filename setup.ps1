@@ -39,11 +39,14 @@ function Write-Warn { param([string]$Msg)
     Write-Host "    !!  $Msg" -ForegroundColor Yellow }
 
 function Scoop-Install { param([string]$Pkg)
-    if (-not (Get-Command $Pkg -ErrorAction SilentlyContinue)) {
+    # Use scoop list, not Get-Command: Windows 11 ships python/node Store stubs
+    # that satisfy Get-Command but are not real installations.
+    $installed = scoop list $Pkg 2>$null | Select-String "^$Pkg\s"
+    if (-not $installed) {
         Write-Host "    Installing $Pkg via Scoop..."
         scoop install $Pkg | Out-Null
     } else {
-        Write-OK "$Pkg already present"
+        Write-OK "$Pkg already present (Scoop)"
     }
 }
 
