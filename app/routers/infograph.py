@@ -186,6 +186,17 @@ async def infograph_data(
             ut = sid_utype.get(al.story_id, "Unknown")
             ut_tech[ut][sub] += 1
 
+    # Include mandatory classifications in freq/s_all so C01 shows all label types
+    for mc in mc_rows:
+        if mc.target_user:
+            sub = mc.target_user.strip()
+            freq[sub] += 1
+            s_all[mc.story_id].add(sub)
+        for c in mc.concepts:
+            sub = c.strip()
+            freq[sub] += 1
+            s_all[mc.story_id].add(sub)
+
     # Co-occurrence
     cooc: dict = defaultdict(int)
     t_cooc: dict = defaultdict(int)

@@ -106,18 +106,18 @@ main { max-width: 1160px; }
   </div>
 </div>
 
-<!-- C02 + C03: Pies -->
+<!-- C02 + C03: Distributions -->
 <div class="ig-panel" id="panel-pies">
   <div class="ig-row">
     <div class="chart-card">
       <h2>C02 — Target User Distribution</h2>
-      <p class="chart-sub">Distribution of mandatory "Target user in story" classification</p>
-      <svg id="c02-svg" style="width:100%;height:340px;display:block"></svg>
+      <p class="chart-sub">Mandatory "Target user in story" classification — count per category</p>
+      <div class="chart-scroll"><svg id="c02-svg"></svg></div>
     </div>
     <div class="chart-card">
       <h2>C03 — Story Concept Distribution</h2>
-      <p class="chart-sub">Distribution of mandatory "User Story Concept" classification</p>
-      <svg id="c03-svg" style="width:100%;height:340px;display:block"></svg>
+      <p class="chart-sub">Mandatory "User Story Concept" classification — count per category</p>
+      <div class="chart-scroll"><svg id="c03-svg"></svg></div>
     </div>
   </div>
 </div>
@@ -263,7 +263,10 @@ function showTab(name) {
   document.querySelectorAll(".ig-panel").forEach(p => p.classList.remove("active"));
   document.getElementById("panel-" + name).classList.add("active");
   activeTab = name;
-  if (gData && !rendered.has(name)) renderTab(name);
+  if (gData && !rendered.has(name)) {
+    // defer one frame so the browser completes layout before reading SVG dimensions
+    requestAnimationFrame(() => renderTab(name));
+  }
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
@@ -323,51 +326,59 @@ function barSvg(svgId, data, legendId) {
   }
 }
 
-function pieChart(svgId, data, labelField, valueField, colorFn, filterKey) {
-  if (!data || !data.length) return;
+function distBar(svgId, data, labelField, valueField, filterKey) {
+  // Horizontal bar chart for distribution data (replaces pie chart)
+  if (!data || !data.length) {
+    d3.select("#" + svgId).append("text").attr("x",10).attr("y",30)
+      .style("font-size","13px").style("fill","#aaa").text("No data");
+    return;
+  }
   const el = document.getElementById(svgId);
-  const W = el.clientWidth || 400, H = 340;
-  const r = Math.min(W * 0.45, H * 0.4);
-  const cx = W * 0.38, cy = H / 2;
+  if (!el) return;
+  const sorted = [...data].sort((a,b)=>b[valueField]-a[valueField]);
+  const total = d3.sum(sorted, d=>d[valueField]);
 
-  d3.select("#" + svgId).attr("width", W).attr("height", H).selectAll("*").remove();
-  const svg = d3.select("#" + svgId);
-  const total = d3.sum(data, d=>d[valueField]);
+  const PALETTE = ["#4e79a7","#f28e2b","#e15759","#76b7b2","#59a14f",
+                   "#edc948","#b07aa1","#ff9da7","#9c755f","#bab0ac"];
+  const colorMap = {};
+  sorted.forEach((d,i)=>{ colorMap[d[labelField]] = PALETTE[i % PALETTE.length]; });
 
-  const colors = d3.scaleOrdinal().domain(data.map(d=>d[labelField])).range(
-    colorFn ? data.map(d=>colorFn(d)) :
-    d3.schemeTableau10.concat(d3.schemePastel1)
-  );
+  const W = Math.max((el.parentElement||el).getBoundingClientRect().width || 400, 280);
+  const rowH = 36, padL = 180, padR = 80, padT = 12, padB = 12;
+  const H = padT + sorted.length * rowH + padB;
+  const barW = W - padL - padR;
 
-  const pie = d3.pie().value(d=>d[valueField]).sort((a,b)=>b[valueField]-a[valueField]);
-  const arc = d3.arc().innerRadius(0).outerRadius(r);
-  const arcLabel = d3.arc().innerRadius(r*0.6).outerRadius(r*0.9);
+  const svg = d3.select("#" + svgId).attr("width", W).attr("height", H);
+  svg.selectAll("*").remove();
 
-  const g = svg.append("g").attr("transform",`translate(${cx},${cy})`);
-  g.selectAll("path").data(pie(data)).join("path")
-    .attr("d", arc).attr("fill", d=>colors(d.data[labelField]))
-    .attr("stroke","#fff").attr("stroke-width",1.5)
-    .classed("clickable", !!filterKey)
-    .on("mouseover",(ev,d)=>showTip(ev,
-      `<strong>${d.data[labelField]}</strong><br>Count: <strong>${d.data[valueField]}</strong><br>${(d.data[valueField]/total*100).toFixed(1)}%` +
-      (filterKey ? "<br><em>Click to filter</em>" : "")))
-    .on("mousemove",moveTip).on("mouseout",hideTip)
-    .on("click", filterKey ? (ev,d)=>setFilter(filterKey, d.data[labelField]) : null);
+  const x = d3.scaleLinear().domain([0, d3.max(sorted, d=>d[valueField])]).range([0, barW]);
 
-  g.selectAll("text.pct").data(pie(data)).join("text")
-    .attr("class","pct")
-    .attr("transform", d=>`translate(${arcLabel.centroid(d)})`)
-    .attr("text-anchor","middle").style("font-size","11px").style("fill","#fff").style("font-weight","600")
-    .text(d=>{ const pct=d.data[valueField]/total*100; return pct>3?pct.toFixed(0)+"%":""; });
+  sorted.forEach((d, i) => {
+    const y = padT + i * rowH;
+    const color = colorMap[d[labelField]];
+    const bw = x(d[valueField]);
+    const pct = (d[valueField] / total * 100).toFixed(1);
+    const label = String(d[labelField]);
 
-  // Legend on the right
-  const lg = svg.append("g").attr("transform",`translate(${cx+r+18},${cy - data.length*10})`);
-  data.forEach((d,i) => {
-    const row = lg.append("g").attr("transform",`translate(0,${i*20})`);
-    row.append("rect").attr("width",10).attr("height",10).attr("y",-8).attr("rx",2)
-      .attr("fill",colors(d[labelField]));
-    row.append("text").attr("x",14).style("font-size","11px").style("fill","#333")
-      .text(`${d[labelField]}  (${d[valueField]})`);
+    // Background track
+    svg.append("rect").attr("x", padL).attr("y", y+4).attr("width", barW)
+      .attr("height", rowH-8).attr("fill","#f0f2f5").attr("rx",4);
+    // Value bar
+    svg.append("rect").attr("x", padL).attr("y", y+4).attr("width", bw)
+      .attr("height", rowH-8).attr("fill", color).attr("rx",4)
+      .classed("clickable", !!filterKey)
+      .on("mouseover", ev=>showTip(ev,`<strong>${label}</strong><br>Count: <strong>${d[valueField]}</strong><br>${pct}%`
+          + (filterKey?"<br><em>Click to filter</em>":"")))
+      .on("mousemove", moveTip).on("mouseout", hideTip)
+      .on("click", filterKey ? ()=>setFilter(filterKey, label) : null);
+    // Label (left)
+    svg.append("text").attr("x", padL-6).attr("y", y+rowH/2+1)
+      .attr("text-anchor","end").style("font-size","11px").style("fill","#333")
+      .text(label.length>24 ? label.slice(0,23)+"…" : label);
+    // Count + pct (right)
+    svg.append("text").attr("x", padL+bw+6).attr("y", y+rowH/2+1)
+      .style("font-size","10px").style("fill","#666")
+      .text(`${d[valueField]}  (${pct}%)`);
   });
 }
 
@@ -739,8 +750,8 @@ function renderTab(tab) {
     barSvg("c01-svg", d.label_freq, "c01-legend");
     barSvg("c10-svg", d.tech_label_freq, "c10-legend");
   } else if (tab==="pies") {
-    pieChart("c02-svg", d.target_user_freq, "sublabel", "count", null, "target_user");
-    pieChart("c03-svg", d.concept_freq, "concept", "count", null, "story_concept");
+    distBar("c02-svg", d.target_user_freq, "sublabel", "count", "target_user");
+    distBar("c03-svg", d.concept_freq, "concept", "count", "story_concept");
   } else if (tab==="net") {
     networkChart("c04-svg","c04-legend", d.label_freq, d.cooccurrence);
     networkChart("c11-svg","c11-legend", d.tech_label_freq, d.tech_cooccurrence);

@@ -16,7 +16,7 @@
       <img src="/static/riecs-glyph.png" alt="RIECS concept" class="nav-logo">
       <span class="nav-subtitle">Label of User Stories {{ APP_VERSION }}</span>
       {% if user %}
-        <span class="user-info">{{ user.name }}{% if user.group %} · {{ user.group.name }}{% endif %}</span>
+        <span class="user-info">{% if user.is_admin %}Administrator{% else %}{{ user.name }}{% if user.group %} · {{ user.group.name }}{% endif %}{% endif %}</span>
         <div class="nav-links">
           <a href="/review">Review</a>
           <a href="/labels">Labels</a>

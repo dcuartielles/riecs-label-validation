@@ -97,6 +97,21 @@ Screenshots of all tabs at this point should be saved to `docs/screenshots/`
 
 ---
 
+## Phase 1b — Add peer reviews
+
+```bash
+python scripts/simulate_session.py --peer-reviews
+```
+
+For each group, selects 5% of labelled stories and has a different fake user in
+the same group confirm (80%) or reject (20%) each label on those stories.
+This populates the `AddedLabelDecision` table and makes the **Peer Review Summary**
+chart in the Breakdown tab show non-zero counts.
+
+Run this after Phase 1 (and again after Phase 2 if desired).
+
+---
+
 ## Phase 2 — Complete remaining labels
 
 ```bash
