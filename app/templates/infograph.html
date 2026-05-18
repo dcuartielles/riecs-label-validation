@@ -64,9 +64,30 @@ main { max-width: 1160px; }
 .clickable:hover { opacity:0.75; }
 </style>
 
-<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem;margin-bottom:1rem">
+<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.75rem">
   <h1 style="margin-bottom:0">Infographics</h1>
   <span id="ig-status" class="muted" style="font-size:0.82rem">Loading…</span>
+</div>
+
+<!-- Analysis controls — always visible -->
+<div id="analysis-controls" style="display:flex;align-items:center;gap:1.25rem;flex-wrap:wrap;background:#f0f4f8;border:1.5px solid #c8d6e5;border-radius:8px;padding:0.5rem 0.9rem;margin-bottom:0.75rem;font-size:0.82rem;">
+  <span style="font-weight:700;color:#2c324c;white-space:nowrap">Analysis:</span>
+  <label style="display:flex;align-items:center;gap:0.45rem;white-space:nowrap">
+    High relevance:
+    <input type="range" id="high-mult" min="1" max="5" step="0.5" value="1" style="width:80px;vertical-align:middle"
+           oninput="onSlider('high_mult','high-mult-val',this.value)">
+    <strong id="high-mult-val">1.0×</strong>
+  </label>
+  <label style="display:flex;align-items:center;gap:0.45rem;white-space:nowrap">
+    Very High relevance:
+    <input type="range" id="very-high-mult" min="1" max="5" step="0.5" value="1" style="width:80px;vertical-align:middle"
+           oninput="onSlider('very_high_mult','very-high-mult-val',this.value)">
+    <strong id="very-high-mult-val">1.0×</strong>
+  </label>
+  <label style="display:flex;align-items:center;gap:0.35rem;cursor:pointer">
+    <input type="checkbox" id="include-rejected" checked onchange="onRejectionToggle()">
+    Include rejected stories
+  </label>
 </div>
 
 <!-- Active filter bar -->
@@ -86,6 +107,7 @@ main { max-width: 1160px; }
   <button class="ig-tab" onclick="showTab('partner')">C07 · Partners</button>
   <button class="ig-tab" onclick="showTab('pareto')">C08/C13 · Pareto</button>
   <button class="ig-tab" onclick="showTab('breakdown')">C14/C15 · Breakdown</button>
+  <button class="ig-tab" onclick="showTab('utypes')">C16 · User Types</button>
 </div>
 
 <div id="tip"></div>
@@ -210,12 +232,49 @@ main { max-width: 1160px; }
   </div>
 </div>
 
+<!-- C16: User Types -->
+<div class="ig-panel" id="panel-utypes">
+  <div class="chart-card">
+    <h2>C16 — Technical Labels by User Type</h2>
+    <p class="chart-sub">Top 15 technical labels per user type, sized by count. Toggle to include mandatory classification labels.</p>
+    <label style="display:inline-flex;align-items:center;gap:0.4rem;cursor:pointer;font-size:0.83rem;margin-bottom:0.75rem">
+      <input type="checkbox" id="show-nontech" onchange="renderUtypes()">
+      Include non-technical labels (User Story Concept &amp; Target user in story)
+    </label>
+    <div class="chart-scroll"><svg id="c16-svg"></svg></div>
+  </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
 <script>
 // ── Globals ──────────────────────────────────────────────────────────────────
 let gData = null;
 let activeTab = "freq";
 const rendered = new Set();
+
+// ── Analysis controls ─────────────────────────────────────────────────────────
+let analysisParams = { high_mult: 1.0, very_high_mult: 1.0, include_rejected: true };
+let sliderDebounce = null;
+
+function onSlider(paramKey, valId, val) {
+  document.getElementById(valId).textContent = parseFloat(val).toFixed(1) + "×";
+  analysisParams[paramKey] = parseFloat(val);
+  clearTimeout(sliderDebounce);
+  sliderDebounce = setTimeout(() => { rendered.clear(); loadData(); }, 500);
+}
+
+function onRejectionToggle() {
+  analysisParams.include_rejected = document.getElementById("include-rejected").checked;
+  rendered.clear();
+  loadData();
+}
+
+function renderUtypes() {
+  if (!gData) return;
+  const showAll = document.getElementById("show-nontech")?.checked;
+  const data = showAll ? gData.user_type_all_freq : gData.user_type_tech_freq;
+  groupedHeatmap("c16-svg", data, "target_user");
+}
 
 // ── Filter state ──────────────────────────────────────────────────────────────
 let filterState = {};
@@ -258,7 +317,7 @@ function hideTip() { tip.style.opacity = "0"; }
 // ── Tab management ────────────────────────────────────────────────────────────
 function showTab(name) {
   document.querySelectorAll(".ig-tab").forEach((b,i) => {
-    b.classList.toggle("active", ["freq","pies","net","heat","tree","partner","pareto","breakdown"][i] === name);
+    b.classList.toggle("active", ["freq","pies","net","heat","tree","partner","pareto","breakdown","utypes"][i] === name);
   });
   document.querySelectorAll(".ig-panel").forEach(p => p.classList.remove("active"));
   document.getElementById("panel-" + name).classList.add("active");
@@ -769,13 +828,20 @@ function renderTab(tab) {
     groupedHeatmap("c14-svg", d.user_type_tech_freq, "target_user");
     groupedHeatmap("c15-svg", d.concept_tech_freq, "story_concept");
     peerBar("c-peer-svg", d.peer_review);
+  } else if (tab==="utypes") {
+    renderUtypes();
   }
 }
 
 // ── Load + auto-refresh ───────────────────────────────────────────────────────
 async function loadData() {
   try {
-    const params = new URLSearchParams(filterState).toString();
+    const params = new URLSearchParams({
+      ...filterState,
+      high_mult: analysisParams.high_mult,
+      very_high_mult: analysisParams.very_high_mult,
+      include_rejected: analysisParams.include_rejected,
+    }).toString();
     const resp = await fetch("/infograph/data" + (params ? "?" + params : ""));
     if (!resp.ok) return;
     gData = await resp.json();

@@ -11,7 +11,8 @@ from app.auth import get_current_user
 from app.database import SessionLocal
 from app.models import (
     AddedLabel, AddedLabelDecision, Group, MandatoryClassification,
-    Session as ReviewSession, TaxonomyLabel, User, UserStory,
+    Session as ReviewSession, StoryRejection, StoryRelevance,
+    TaxonomyLabel, User, UserStory,
 )
 
 router = APIRouter()
@@ -69,12 +70,15 @@ async def infograph(request: Request):
 @router.get("/infograph/data")
 async def infograph_data(
     request: Request,
-    session_id:    int | None = None,
-    partner:       str | None = None,
-    main_category: str | None = None,
-    sublabel:      str | None = None,
-    target_user:   str | None = None,
-    story_concept: str | None = None,
+    session_id:       int | None = None,
+    partner:          str | None = None,
+    main_category:    str | None = None,
+    sublabel:         str | None = None,
+    target_user:      str | None = None,
+    story_concept:    str | None = None,
+    include_rejected: bool = True,
+    high_mult:        float = 1.0,
+    very_high_mult:   float = 1.0,
 ):
     user = await get_current_user(request)
     if not user:
@@ -114,8 +118,24 @@ async def infograph_data(
         dec_f = [AddedLabelDecision.session_id == session.id] if session else []
         dec_rows = (await db.execute(select(AddedLabelDecision).where(*dec_f))).scalars().all()
 
+        rej_f = [StoryRejection.session_id == session.id] if session else []
+        rej_rows = (await db.execute(select(StoryRejection).where(*rej_f))).scalars().all()
+
+        rel_f = [StoryRelevance.session_id == session.id] if session else []
+        rel_rows = (await db.execute(select(StoryRelevance).where(*rel_f))).scalars().all()
+
         stories = (await db.execute(select(UserStory))).scalars().all()
         sid_utype = {s.id: (s.user_type or "Unknown").strip() for s in stories}
+
+    # ── Rejection & relevance ──────────────────────────────────────────────
+    rejected_sids: set[int] = {r.story_id for r in rej_rows if r.rejected}
+
+    # Per (story_id, group_id) relevance weight — take max if multiple entries
+    rel_weights: dict[tuple[int, int], float] = {}
+    for r in rel_rows:
+        w = very_high_mult if r.score == "VeryHigh" else (high_mult if r.score == "High" else 1.0)
+        key = (r.story_id, r.group_id)
+        rel_weights[key] = max(rel_weights.get(key, 1.0), w)
 
     # ── Filtering ──────────────────────────────────────────────────────────
     active_filters = {k: v for k, v in {
@@ -162,40 +182,52 @@ async def infograph_data(
             mc_rows = [mc for mc in mc_rows if mc.story_id in filtered_sids]
 
     # ── Aggregation ────────────────────────────────────────────────────────
-    freq:      dict[str, int] = defaultdict(int)
-    tech_freq: dict[str, int] = defaultdict(int)
-    s_all:     dict[int, set] = defaultdict(set)
-    s_tech:    dict[int, set] = defaultdict(set)
-    partner_main: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-    ut_tech:      dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    freq:      dict[str, float] = defaultdict(float)
+    tech_freq: dict[str, float] = defaultdict(float)
+    s_all:     dict[int, set]   = defaultdict(set)
+    s_tech:    dict[int, set]   = defaultdict(set)
+    partner_main: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    ut_tech:      dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    ut_all:       dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
 
     for al in rows:
         if not al.taxonomy_label or not al.taxonomy_label.sublabel:
+            continue
+        if not include_rejected and al.story_id in rejected_sids:
             continue
         sub  = al.taxonomy_label.sublabel.strip()
         main = sub_to_main.get(sub, al.taxonomy_label.label or "")
         is_tech = main not in MANDATORY_CATS
 
-        freq[sub] += 1
+        group_id = al.user.group_id if al.user else None
+        weight = rel_weights.get((al.story_id, group_id), 1.0) if group_id else 1.0
+
+        freq[sub] += weight
         s_all[al.story_id].add(sub)
+        ut = sid_utype.get(al.story_id, "Unknown")
+        ut_all[ut][sub] += weight
         if is_tech:
-            tech_freq[sub] += 1
+            tech_freq[sub] += weight
             s_tech[al.story_id].add(sub)
             if al.user and al.user.group_id:
-                partner_main[gid_name.get(al.user.group_id, "?")][main] += 1
-            ut = sid_utype.get(al.story_id, "Unknown")
-            ut_tech[ut][sub] += 1
+                partner_main[gid_name.get(al.user.group_id, "?")][main] += weight
+            ut_tech[ut][sub] += weight
 
     # Include mandatory classifications in freq/s_all so C01 shows all label types
     for mc in mc_rows:
+        if not include_rejected and mc.story_id in rejected_sids:
+            continue
+        ut = sid_utype.get(mc.story_id, "Unknown")
         if mc.target_user:
             sub = mc.target_user.strip()
             freq[sub] += 1
             s_all[mc.story_id].add(sub)
+            ut_all[ut][sub] += 1
         for c in mc.concepts:
             sub = c.strip()
             freq[sub] += 1
             s_all[mc.story_id].add(sub)
+            ut_all[ut][sub] += 1
 
     # Co-occurrence
     cooc: dict = defaultdict(int)
@@ -212,6 +244,8 @@ async def infograph_data(
     con_freq: dict[str, int] = defaultdict(int)
     sid_cons: dict[int, list] = {}
     for mc in mc_rows:
+        if not include_rejected and mc.story_id in rejected_sids:
+            continue
         if mc.target_user:
             tu_freq[mc.target_user.strip()] += 1
         for c in mc.concepts:
@@ -219,22 +253,26 @@ async def infograph_data(
         sid_cons[mc.story_id] = mc.concepts
 
     # Concept → tech label mapping
-    con_tech: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    con_tech: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
     for al in rows:
         if not al.taxonomy_label or not al.taxonomy_label.sublabel:
+            continue
+        if not include_rejected and al.story_id in rejected_sids:
             continue
         sub  = al.taxonomy_label.sublabel.strip()
         main = sub_to_main.get(sub, "")
         if main in MANDATORY_CATS:
             continue
+        group_id = al.user.group_id if al.user else None
+        weight = rel_weights.get((al.story_id, group_id), 1.0) if group_id else 1.0
         for c in sid_cons.get(al.story_id, []):
-            con_tech[c.strip()][sub] += 1
+            con_tech[c.strip()][sub] += weight
 
     # ── Serialise ──────────────────────────────────────────────────────────
     def items(d, n=100):
         return [
             {"sublabel": s, "main_category": sub_to_main.get(s, ""),
-             "color": _col(sub_to_main.get(s, "")), "count": c}
+             "color": _col(sub_to_main.get(s, "")), "count": round(c)}
             for s, c in sorted(d.items(), key=lambda x: -x[1])[:n]
         ]
 
@@ -253,18 +291,24 @@ async def infograph_data(
     for p, mf in partner_main.items():
         tot = sum(mf.values()) or 1
         pm_serial[p] = [
-            {"main_category": m, "count": c, "pct": round(c/tot*100,1), "color": _col(m)}
+            {"main_category": m, "count": round(c), "pct": round(c/tot*100,1), "color": _col(m)}
             for m, c in sorted(mf.items(), key=lambda x: -x[1])
         ]
 
     ut_serial = {
-        ut: [{"sublabel": s, "count": c, "main_category": sub_to_main.get(s,""), "color": _col(sub_to_main.get(s,""))}
-             for s, c in sorted(ld.items(), key=lambda x: -x[1])[:10]]
-        for ut, ld in sorted(ut_tech.items(), key=lambda x: -sum(x[1].values()))[:10]
+        ut: [{"sublabel": s, "count": round(c), "main_category": sub_to_main.get(s,""), "color": _col(sub_to_main.get(s,""))}
+             for s, c in sorted(ld.items(), key=lambda x: -x[1])[:15]]
+        for ut, ld in sorted(ut_tech.items(), key=lambda x: -sum(x[1].values()))[:15]
+    }
+
+    ut_all_serial = {
+        ut: [{"sublabel": s, "count": round(c), "main_category": sub_to_main.get(s,""), "color": _col(sub_to_main.get(s,""))}
+             for s, c in sorted(ld.items(), key=lambda x: -x[1])[:15]]
+        for ut, ld in sorted(ut_all.items(), key=lambda x: -sum(x[1].values()))[:15]
     }
 
     con_serial = {
-        co: [{"sublabel": s, "count": c, "main_category": sub_to_main.get(s,""), "color": _col(sub_to_main.get(s,""))}
+        co: [{"sublabel": s, "count": round(c), "main_category": sub_to_main.get(s,""), "color": _col(sub_to_main.get(s,""))}
              for s, c in sorted(ld.items(), key=lambda x: -x[1])[:10]]
         for co, ld in sorted(con_tech.items(), key=lambda x: -sum(x[1].values()))[:10]
     }
@@ -279,9 +323,10 @@ async def infograph_data(
         "tech_cooccurrence":  links(t_cooc, top50_tech),
         "target_user_freq":   [{"sublabel": k, "count": v} for k, v in sorted(tu_freq.items(), key=lambda x: -x[1])],
         "concept_freq":       [{"concept": k, "count": v} for k, v in sorted(con_freq.items(), key=lambda x: -x[1])],
-        "partner_main_freq":  pm_serial,
+        "partner_main_freq":   pm_serial,
         "user_type_tech_freq": ut_serial,
-        "concept_tech_freq":  con_serial,
+        "user_type_all_freq":  ut_all_serial,
+        "concept_tech_freq":   con_serial,
         "peer_review":        {"confirm": dec_c, "reject": dec_r},
         "categories":         [{"name": k, "color": v} for k, v in CAT_COLOURS.items()],
         "total_stories":      len(s_all),
