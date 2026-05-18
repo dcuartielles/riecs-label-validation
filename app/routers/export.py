@@ -37,8 +37,9 @@ FILL_AMBER    = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type=
 FILL_BLUE_HDR = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
 FILL_RED_HDR  = PatternFill(start_color="C00000", end_color="C00000", fill_type="solid")
 
-FONT_WHITE_BOLD = Font(bold=True, color="FFFFFF")
-FILL_DARK_RED   = PatternFill(start_color="C00000", end_color="C00000", fill_type="solid")
+FONT_WHITE_BOLD  = Font(bold=True, color="FFFFFF")
+FILL_DARK_RED    = PatternFill(start_color="C00000", end_color="C00000", fill_type="solid")
+FILL_NEW_LABEL   = PatternFill(start_color="FF9900", end_color="FF9900", fill_type="solid")
 
 STORY_COLS = ["Story ID", "Workshop", "Submitted by", "Stakeholder Group",
               "User type", "Task", "Goal", "Additional Notes"]
@@ -679,22 +680,33 @@ async def export_labelbook(request: Request):
             creators.setdefault(tid, uname)
 
     wb = openpyxl.load_workbook(LABELBOOK_PATH)
-    ws = wb.active
+
+    # Sheet 1: original labelbook, untouched
+    ws_orig = wb.active
+    ws_orig.title = "Original Labelbook"
+
+    # Sheet 2: revised copy with new labels appended in orange
+    ws_rev = wb.copy_worksheet(ws_orig)
+    ws_rev.title = "Revised Labelbook"
 
     if new_labels:
-        last_row = ws.max_row + 2
-        header_cell = ws.cell(row=last_row, column=3, value="NEW LABELS (added during sessions)")
+        last_row = ws_rev.max_row + 2
+
+        header_cell = ws_rev.cell(row=last_row, column=3, value="NEW LABELS (added during sessions)")
         header_cell.font = FONT_WHITE_BOLD
         header_cell.fill = FILL_HDR_NEW
-        ws.merge_cells(start_row=last_row, start_column=3, end_row=last_row, end_column=7)
+        created_by_cell = ws_rev.cell(row=last_row, column=7, value="Created by")
+        created_by_cell.font = FONT_WHITE_BOLD
+        created_by_cell.fill = FILL_HDR_NEW
+        ws_rev.merge_cells(start_row=last_row, start_column=3, end_row=last_row, end_column=6)
 
         for i, t in enumerate(new_labels, start=1):
             r = last_row + i
-            ws.cell(row=r, column=3, value=t.label).fill      = FILL_GREEN
-            ws.cell(row=r, column=4, value=t.sublabel).fill   = FILL_GREEN
-            ws.cell(row=r, column=5, value=t.source or "").fill = FILL_GREEN
-            ws.cell(row=r, column=6, value=t.description or "").fill = FILL_GREEN
-            ws.cell(row=r, column=7, value=creators.get(t.id, "")).fill = FILL_GREEN
+            ws_rev.cell(row=r, column=3, value=t.label).fill        = FILL_NEW_LABEL
+            ws_rev.cell(row=r, column=4, value=t.sublabel).fill     = FILL_NEW_LABEL
+            ws_rev.cell(row=r, column=5, value=t.source or "").fill = FILL_NEW_LABEL
+            ws_rev.cell(row=r, column=6, value=t.description or "").fill = FILL_NEW_LABEL
+            ws_rev.cell(row=r, column=7, value=creators.get(t.id, "")).fill = FILL_NEW_LABEL
 
     buf = io.BytesIO()
     wb.save(buf)
