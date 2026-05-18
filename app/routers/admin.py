@@ -2,12 +2,12 @@ import json
 import random
 import shutil
 import zipfile
-from app.templates import templates
 from datetime import datetime
 from pathlib import Path
+from app.templates import templates
 
 from fastapi import APIRouter, Request, Form
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from sqlalchemy import select, func, delete
 from sqlalchemy.orm import selectinload
 
@@ -323,3 +323,12 @@ async def set_admin(
             await db.commit()
 
     return RedirectResponse(url="/admin", status_code=302)
+
+
+@router.get("/admin/download-db")
+async def download_db(request: Request):
+    user = await require_admin(request)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+    db_path = Path("labelling.db")
+    return FileResponse(db_path, filename="labelling.db", media_type="application/octet-stream")
