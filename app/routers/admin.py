@@ -327,8 +327,25 @@ async def set_admin(
 
 @router.get("/admin/download-db")
 async def download_db(request: Request):
+    import sqlite3, tempfile, os
+    from fastapi.responses import StreamingResponse
     user = await require_admin(request)
     if not user:
         return RedirectResponse(url="/login", status_code=302)
-    db_path = Path("labelling.db")
-    return FileResponse(db_path, filename="labelling.db", media_type="application/octet-stream")
+    # Safe consistent snapshot via SQLite backup API (works even under active writes)
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    src = sqlite3.connect("labelling.db")
+    dst = sqlite3.connect(tmp.name)
+    src.backup(dst)
+    src.close()
+    dst.close()
+    def _stream():
+        with open(tmp.name, "rb") as f:
+            yield from iter(lambda: f.read(65536), b"")
+        os.unlink(tmp.name)
+    return StreamingResponse(
+        _stream(),
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": "attachment; filename=labelling.db"},
+    )
