@@ -13,7 +13,7 @@ from sqlalchemy.orm import selectinload
 from app.auth import get_current_user
 from app.database import SessionLocal
 from app.models import (
-    AddedLabel, Group, GroupAssignment,
+    AddedLabel, AddedLabelDecision, Group, GroupAssignment,
     MandatoryClassification, Session as ReviewSession,
     StoryRejection, StoryRelevance, TaxonomyLabel, User, UserStory,
 )
@@ -393,6 +393,76 @@ def build_stats_conflicts_sheet(wb_out, groups, all_stories,
     return ws
 
 
+def build_label_authorship_sheet(wb_out, authorship_rows, uid_name, uid_group, gid_name):
+    """One row per added label: who added what to which story."""
+    ws = wb_out.create_sheet(title="Label Authorship")
+    cols = ["Story ID", "Workshop", "User Type", "Task",
+            "Group", "Added By", "Label", "Sublabel", "Note", "New?"]
+    _write_header_row(ws, cols, FILL_STAT_HDR)
+
+    for row_idx, al in enumerate(authorship_rows, start=2):
+        s = al.story
+        tl = al.taxonomy_label
+        label_str   = tl.label    if tl else (al.free_text or "")
+        sublabel_str = tl.sublabel if tl else ""
+        is_new = "(*)" if (tl and tl.is_user_created) else ""
+        group_name = gid_name.get(uid_group.get(al.user_id), "?")
+        vals = [
+            s.story_id if s else "",
+            s.workshop or "" if s else "",
+            s.user_type or "" if s else "",
+            (s.task or "")[:120] if s else "",
+            group_name,
+            uid_name.get(al.user_id, "?"),
+            label_str,
+            sublabel_str,
+            al.note or "",
+            is_new,
+        ]
+        for c, val in enumerate(vals, 1):
+            cell = ws.cell(row=row_idx, column=c, value=val)
+            if is_new:
+                cell.fill = FILL_LT_GREEN
+
+    _autofit(ws)
+    return ws
+
+
+def build_label_decisions_sheet(wb_out, decision_rows, uid_name, uid_group, gid_name):
+    """Who confirmed or rejected each peer label."""
+    ws = wb_out.create_sheet(title="Label Decisions")
+    cols = ["Story ID", "Group", "Label", "Sublabel",
+            "Added By", "Decision", "Decided By"]
+    _write_header_row(ws, cols, FILL_STAT_HDR)
+
+    for row_idx, dec in enumerate(decision_rows, start=2):
+        al = dec.added_label
+        tl = al.taxonomy_label if al else None
+        s  = al.story if al else None
+        label_str    = tl.label    if tl else (al.free_text if al else "")
+        sublabel_str = tl.sublabel if tl else ""
+        adder_group  = gid_name.get(uid_group.get(al.user_id if al else None), "?")
+        vals = [
+            s.story_id if s else "",
+            adder_group,
+            label_str,
+            sublabel_str,
+            uid_name.get(al.user_id if al else None, "?"),
+            dec.decision,
+            uid_name.get(dec.user_id, "?"),
+        ]
+        for c, val in enumerate(vals, 1):
+            cell = ws.cell(row=row_idx, column=c, value=val)
+            if dec.decision == "reject":
+                cell.fill = FILL_DARK_RED
+                cell.font = FONT_WHITE_BOLD
+            elif dec.decision == "confirm":
+                cell.fill = FILL_LT_GREEN
+
+    _autofit(ws)
+    return ws
+
+
 async def generate_workbook(
     db,
     session_id: int | None = None,
@@ -423,8 +493,9 @@ async def generate_workbook(
     story_by_id = {s.id: s for s in all_stories}
 
     all_users = (await db.execute(select(User))).scalars().all()
-    uid_name = {u.id: u.name for u in all_users}
-    gid_name = {g.id: g.name for g in groups}
+    uid_name  = {u.id: u.name     for u in all_users}
+    uid_group = {u.id: u.group_id for u in all_users}
+    gid_name  = {g.id: g.name     for g in groups}
 
     per_group_added:     dict[int, dict[int, list]] = {}
     per_group_mandatory: dict[int, dict[int, MandatoryClassification]] = {}
@@ -522,6 +593,39 @@ async def generate_workbook(
         per_group_rejection, per_group_relevance,
         assigned_counts,
     )
+
+    # Label authorship
+    auth_filter = []
+    if rev_session:
+        auth_filter.append(AddedLabel.session_id == rev_session.id)
+    if group_ids is not None:
+        auth_filter.append(User.group_id.in_(group_ids))
+    authorship_rows = (await db.execute(
+        select(AddedLabel)
+        .join(User, AddedLabel.user_id == User.id)
+        .options(
+            selectinload(AddedLabel.story),
+            selectinload(AddedLabel.taxonomy_label),
+        )
+        .where(*auth_filter)
+        .order_by(AddedLabel.story_id, AddedLabel.user_id)
+    )).scalars().all()
+    build_label_authorship_sheet(wb_out, authorship_rows, uid_name, uid_group, gid_name)
+
+    # Label decisions (peer confirm/reject)
+    dec_filter = []
+    if rev_session:
+        dec_filter.append(AddedLabelDecision.session_id == rev_session.id)
+    decision_rows = (await db.execute(
+        select(AddedLabelDecision)
+        .options(
+            selectinload(AddedLabelDecision.added_label).selectinload(AddedLabel.story),
+            selectinload(AddedLabelDecision.added_label).selectinload(AddedLabel.taxonomy_label),
+        )
+        .where(*dec_filter)
+        .order_by(AddedLabelDecision.added_label_id)
+    )).scalars().all()
+    build_label_decisions_sheet(wb_out, decision_rows, uid_name, uid_group, gid_name)
 
     return wb_out, rev_session
 
