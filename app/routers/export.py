@@ -39,7 +39,7 @@ FILL_RED_HDR  = PatternFill(start_color="C00000", end_color="C00000", fill_type=
 
 FONT_WHITE_BOLD  = Font(bold=True, color="FFFFFF")
 FILL_DARK_RED    = PatternFill(start_color="C00000", end_color="C00000", fill_type="solid")
-FILL_NEW_LABEL   = PatternFill(start_color="FF9900", end_color="FF9900", fill_type="solid")
+FILL_NEW_LABEL   = PatternFill(start_color="FFD280", end_color="FFD280", fill_type="solid")
 
 STORY_COLS = ["Story ID", "Workshop", "Submitted by", "Stakeholder Group",
               "User type", "Task", "Goal", "Additional Notes"]
@@ -688,16 +688,29 @@ async def export_labelbook(request: Request):
             )).all():
                 creators.setdefault(tid, uname)
 
+    BODY_SIZE = 10
+    _body_font = Font(size=BODY_SIZE)
+
+    def _nl(ws, r, c, val=""):
+        cell = ws.cell(r, c, val)
+        cell.fill = FILL_NEW_LABEL
+        cell.font = _body_font
+        return cell
+
     def _copy_row(src_ws, dst_ws, src_r, dst_r, n_cols):
         for c in range(1, n_cols + 1):
             src = src_ws.cell(src_r, c)
             dst = dst_ws.cell(dst_r, c)
             dst.value = src.value
             if src.has_style:
-                dst.font      = copy(src.font)
+                f = copy(src.font)
+                dst.font = Font(name=f.name, size=BODY_SIZE, bold=f.bold,
+                                italic=f.italic, color=f.color, underline=f.underline)
                 dst.fill      = copy(src.fill)
                 dst.border    = copy(src.border)
                 dst.alignment = copy(src.alignment)
+            else:
+                dst.font = Font(size=BODY_SIZE)
 
     wb = openpyxl.load_workbook(LABELBOOK_PATH)
 
@@ -741,22 +754,22 @@ async def export_labelbook(request: Request):
             _copy_row(ws_orig, ws_rev, r, wr, n_cols)
             wr += 1
         for t in new_by_group.get(group_name, []):
-            ws_rev.cell(wr, 4, t.sublabel).fill        = FILL_NEW_LABEL
-            ws_rev.cell(wr, 5, t.source or "").fill    = FILL_NEW_LABEL
-            ws_rev.cell(wr, 6, t.description or "").fill = FILL_NEW_LABEL
-            ws_rev.cell(wr, 7, creators.get(t.id, "")).fill = FILL_NEW_LABEL
+            _nl(ws_rev, wr, 4, t.sublabel)
+            _nl(ws_rev, wr, 5, t.source or "")
+            _nl(ws_rev, wr, 6, t.description or "")
+            _nl(ws_rev, wr, 7, creators.get(t.id, ""))
             wr += 1
 
     # New labels whose top-level group is not in the original
     for group_name, labels in new_by_group.items():
         if group_name not in group_order:
-            ws_rev.cell(wr, 3, group_name).fill = FILL_NEW_LABEL
+            _nl(ws_rev, wr, 3, group_name)
             wr += 1
             for t in labels:
-                ws_rev.cell(wr, 4, t.sublabel).fill        = FILL_NEW_LABEL
-                ws_rev.cell(wr, 5, t.source or "").fill    = FILL_NEW_LABEL
-                ws_rev.cell(wr, 6, t.description or "").fill = FILL_NEW_LABEL
-                ws_rev.cell(wr, 7, creators.get(t.id, "")).fill = FILL_NEW_LABEL
+                _nl(ws_rev, wr, 4, t.sublabel)
+                _nl(ws_rev, wr, 5, t.source or "")
+                _nl(ws_rev, wr, 6, t.description or "")
+                _nl(ws_rev, wr, 7, creators.get(t.id, ""))
                 wr += 1
 
     _autofit(ws_rev)
@@ -765,11 +778,11 @@ async def export_labelbook(request: Request):
     ws_new = wb.create_sheet("New Labels")
     _write_header_row(ws_new, ["Label", "Sublabel", "Source", "Description", "Created by"], FILL_HDR_NEW)
     for i, t in enumerate(new_labels, start=2):
-        ws_new.cell(i, 1, t.label).fill             = FILL_NEW_LABEL
-        ws_new.cell(i, 2, t.sublabel).fill          = FILL_NEW_LABEL
-        ws_new.cell(i, 3, t.source or "").fill      = FILL_NEW_LABEL
-        ws_new.cell(i, 4, t.description or "").fill = FILL_NEW_LABEL
-        ws_new.cell(i, 5, creators.get(t.id, "")).fill = FILL_NEW_LABEL
+        _nl(ws_new, i, 1, t.label)
+        _nl(ws_new, i, 2, t.sublabel)
+        _nl(ws_new, i, 3, t.source or "")
+        _nl(ws_new, i, 4, t.description or "")
+        _nl(ws_new, i, 5, creators.get(t.id, ""))
     _autofit(ws_new)
 
     buf = io.BytesIO()
