@@ -218,7 +218,7 @@ def build_rejection_relevance_sheet(wb_out, groups, all_stories,
     ws = wb_out.create_sheet(title="Rejections & Relevance")
     cols = ["Story ID", "Workshop", "User type", "Task",
             "Partner", "Actor", "Rejected", "Rejection reason", "Relevance", "Relevance reason"]
-    _write_header_row(ws, cols, FILL_RED_HDR)
+    _write_header_row(ws, cols, FILL_STAT_HDR)
 
     sid_story = {s.id: s for s in all_stories}
     rows = []
