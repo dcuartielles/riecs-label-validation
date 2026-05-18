@@ -38,6 +38,7 @@ FILL_BLUE_HDR = PatternFill(start_color="4472C4", end_color="4472C4", fill_type=
 FILL_RED_HDR  = PatternFill(start_color="C00000", end_color="C00000", fill_type="solid")
 
 FONT_WHITE_BOLD = Font(bold=True, color="FFFFFF")
+FILL_DARK_RED   = PatternFill(start_color="C00000", end_color="C00000", fill_type="solid")
 
 STORY_COLS = ["Story ID", "Workshop", "Submitted by", "Stakeholder Group",
               "User type", "Task", "Goal", "Additional Notes"]
@@ -258,7 +259,8 @@ def build_rejection_relevance_sheet(wb_out, groups, all_stories,
         for c, val in enumerate(vals, 1):
             cell = ws.cell(row=row_idx, column=c, value=val)
             if rd["rejected"] == "Yes":
-                cell.fill = FILL_LT_RED
+                cell.fill = FILL_DARK_RED
+                cell.font = FONT_WHITE_BOLD
             elif rd["score"] == "VeryHigh":
                 cell.fill = FILL_ORANGE
             elif rd["score"] == "High":
@@ -378,7 +380,7 @@ def build_stats_conflicts_sheet(wb_out, groups, all_stories,
                 tu_str  = mc.target_user if mc else ""
                 lbl_str = ", ".join(
                     (lbl["sublabel"] or lbl["label"]) for lbl in lbls
-                )[:80]
+                )
                 cell_val = ("TU: " + tu_str if tu_str else "") + \
                            ("\nLabels: " + lbl_str if lbl_str else "")
             else:
@@ -560,6 +562,18 @@ async def export_labelbook(request: Request):
             .order_by(TaxonomyLabel.label, TaxonomyLabel.sublabel)
         )).scalars().all()
 
+        # Find who first created each new label via the AddedLabel record
+        creator_rows = (await db.execute(
+            select(AddedLabel.taxonomy_label_id, User.name)
+            .join(User, AddedLabel.user_id == User.id)
+            .where(AddedLabel.taxonomy_label_id.in_([t.id for t in new_labels]))
+            .order_by(AddedLabel.id)
+        )).all()
+        # Keep only the first creator per taxonomy_label_id
+        creators: dict[int, str] = {}
+        for tid, uname in creator_rows:
+            creators.setdefault(tid, uname)
+
     wb = openpyxl.load_workbook(LABELBOOK_PATH)
     ws = wb.active
 
@@ -568,14 +582,15 @@ async def export_labelbook(request: Request):
         header_cell = ws.cell(row=last_row, column=3, value="NEW LABELS (added during sessions)")
         header_cell.font = FONT_WHITE_BOLD
         header_cell.fill = FILL_HDR_NEW
-        ws.merge_cells(start_row=last_row, start_column=3, end_row=last_row, end_column=6)
+        ws.merge_cells(start_row=last_row, start_column=3, end_row=last_row, end_column=7)
 
         for i, t in enumerate(new_labels, start=1):
             r = last_row + i
-            ws.cell(row=r, column=3, value=t.label).fill  = FILL_GREEN
-            ws.cell(row=r, column=4, value=t.sublabel).fill = FILL_GREEN
+            ws.cell(row=r, column=3, value=t.label).fill      = FILL_GREEN
+            ws.cell(row=r, column=4, value=t.sublabel).fill   = FILL_GREEN
             ws.cell(row=r, column=5, value=t.source or "").fill = FILL_GREEN
             ws.cell(row=r, column=6, value=t.description or "").fill = FILL_GREEN
+            ws.cell(row=r, column=7, value=creators.get(t.id, "")).fill = FILL_GREEN
 
     buf = io.BytesIO()
     wb.save(buf)

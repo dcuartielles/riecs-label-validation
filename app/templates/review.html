@@ -258,7 +258,7 @@ main { max-width: 1160px; }
             {% for top_label, sublabels in tax_tree.items() %}
               <optgroup label="{{ top_label }}">
                 {% for t in sublabels %}
-                  <option value="{{ t.id }}">{{ t.sublabel }}</option>
+                  <option value="{{ t.id }}">{{ t.sublabel }}{% if t.is_user_created %} (*){% endif %}</option>
                 {% endfor %}
               </optgroup>
             {% endfor %}
