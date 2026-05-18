@@ -661,52 +661,116 @@ async def export_labelbook(request: Request):
         return RedirectResponse(url="/login", status_code=302)
 
     async with SessionLocal() as db:
-        new_labels = (await db.execute(
-            select(TaxonomyLabel)
+        # New labels sorted by first appearance (AddedLabel.id = arrival order)
+        arrival_rows = (await db.execute(
+            select(TaxonomyLabel.id, func.min(AddedLabel.id).label("first_id"))
+            .join(AddedLabel, AddedLabel.taxonomy_label_id == TaxonomyLabel.id)
             .where(TaxonomyLabel.is_user_created == True)
-            .order_by(TaxonomyLabel.label, TaxonomyLabel.sublabel)
-        )).scalars().all()
-
-        # Find who first created each new label via the AddedLabel record
-        creator_rows = (await db.execute(
-            select(AddedLabel.taxonomy_label_id, User.name)
-            .join(User, AddedLabel.user_id == User.id)
-            .where(AddedLabel.taxonomy_label_id.in_([t.id for t in new_labels]))
-            .order_by(AddedLabel.id)
+            .group_by(TaxonomyLabel.id)
+            .order_by(func.min(AddedLabel.id))
         )).all()
-        # Keep only the first creator per taxonomy_label_id
+        arrival_ids = [tid for tid, _ in arrival_rows]
+
+        tl_by_id = {
+            t.id: t for t in (await db.execute(
+                select(TaxonomyLabel).where(TaxonomyLabel.is_user_created == True)
+            )).scalars().all()
+        }
+        new_labels = [tl_by_id[tid] for tid in arrival_ids if tid in tl_by_id]
+
         creators: dict[int, str] = {}
-        for tid, uname in creator_rows:
-            creators.setdefault(tid, uname)
+        if arrival_ids:
+            for tid, uname in (await db.execute(
+                select(AddedLabel.taxonomy_label_id, User.name)
+                .join(User, AddedLabel.user_id == User.id)
+                .where(AddedLabel.taxonomy_label_id.in_(arrival_ids))
+                .order_by(AddedLabel.id)
+            )).all():
+                creators.setdefault(tid, uname)
+
+    def _copy_row(src_ws, dst_ws, src_r, dst_r, n_cols):
+        for c in range(1, n_cols + 1):
+            src = src_ws.cell(src_r, c)
+            dst = dst_ws.cell(dst_r, c)
+            dst.value = src.value
+            if src.has_style:
+                dst.font      = copy(src.font)
+                dst.fill      = copy(src.fill)
+                dst.border    = copy(src.border)
+                dst.alignment = copy(src.alignment)
 
     wb = openpyxl.load_workbook(LABELBOOK_PATH)
 
-    # Sheet 1: original labelbook, untouched
+    # ── Sheet 1: Original Labelbook (untouched) ───────────────────────────
     ws_orig = wb.active
     ws_orig.title = "Original Labelbook"
+    n_cols = max(ws_orig.max_column, 7)
 
-    # Sheet 2: revised copy with new labels appended in orange
-    ws_rev = wb.copy_worksheet(ws_orig)
-    ws_rev.title = "Revised Labelbook"
+    # Parse original structure: group header rows and sublabel rows
+    HEADER_ROW = 1
+    current_group = None
+    group_order: list[str] = []
+    group_header_row: dict[str, int] = {}
+    group_sublabel_rows: dict[str, list[int]] = defaultdict(list)
 
-    if new_labels:
-        last_row = ws_rev.max_row + 2
+    for r in range(HEADER_ROW + 1, ws_orig.max_row + 1):
+        v = ws_orig.cell(r, 3).value
+        if v:
+            current_group = v
+            if v not in group_order:
+                group_order.append(v)
+                group_header_row[v] = r
+        elif current_group:
+            group_sublabel_rows[current_group].append(r)
 
-        header_cell = ws_rev.cell(row=last_row, column=3, value="NEW LABELS (added during sessions)")
-        header_cell.font = FONT_WHITE_BOLD
-        header_cell.fill = FILL_HDR_NEW
-        created_by_cell = ws_rev.cell(row=last_row, column=7, value="Created by")
-        created_by_cell.font = FONT_WHITE_BOLD
-        created_by_cell.fill = FILL_HDR_NEW
-        ws_rev.merge_cells(start_row=last_row, start_column=3, end_row=last_row, end_column=6)
+    # Group new labels by top-level category, preserving arrival order
+    new_by_group: dict[str, list] = defaultdict(list)
+    for t in new_labels:
+        new_by_group[t.label].append(t)
 
-        for i, t in enumerate(new_labels, start=1):
-            r = last_row + i
-            ws_rev.cell(row=r, column=3, value=t.label).fill        = FILL_NEW_LABEL
-            ws_rev.cell(row=r, column=4, value=t.sublabel).fill     = FILL_NEW_LABEL
-            ws_rev.cell(row=r, column=5, value=t.source or "").fill = FILL_NEW_LABEL
-            ws_rev.cell(row=r, column=6, value=t.description or "").fill = FILL_NEW_LABEL
-            ws_rev.cell(row=r, column=7, value=creators.get(t.id, "")).fill = FILL_NEW_LABEL
+    # ── Sheet 2: Revised Labelbook (new labels inserted into groups) ───────
+    ws_rev = wb.create_sheet("Revised Labelbook", 1)
+    _copy_row(ws_orig, ws_rev, HEADER_ROW, HEADER_ROW, n_cols)
+    ws_rev.cell(HEADER_ROW, 7).value = "Created by"
+
+    wr = HEADER_ROW + 1
+    for group_name in group_order:
+        _copy_row(ws_orig, ws_rev, group_header_row[group_name], wr, n_cols)
+        wr += 1
+        for r in group_sublabel_rows[group_name]:
+            _copy_row(ws_orig, ws_rev, r, wr, n_cols)
+            wr += 1
+        for t in new_by_group.get(group_name, []):
+            ws_rev.cell(wr, 4, t.sublabel).fill        = FILL_NEW_LABEL
+            ws_rev.cell(wr, 5, t.source or "").fill    = FILL_NEW_LABEL
+            ws_rev.cell(wr, 6, t.description or "").fill = FILL_NEW_LABEL
+            ws_rev.cell(wr, 7, creators.get(t.id, "")).fill = FILL_NEW_LABEL
+            wr += 1
+
+    # New labels whose top-level group is not in the original
+    for group_name, labels in new_by_group.items():
+        if group_name not in group_order:
+            ws_rev.cell(wr, 3, group_name).fill = FILL_NEW_LABEL
+            wr += 1
+            for t in labels:
+                ws_rev.cell(wr, 4, t.sublabel).fill        = FILL_NEW_LABEL
+                ws_rev.cell(wr, 5, t.source or "").fill    = FILL_NEW_LABEL
+                ws_rev.cell(wr, 6, t.description or "").fill = FILL_NEW_LABEL
+                ws_rev.cell(wr, 7, creators.get(t.id, "")).fill = FILL_NEW_LABEL
+                wr += 1
+
+    _autofit(ws_rev)
+
+    # ── Sheet 3: New Labels only ──────────────────────────────────────────
+    ws_new = wb.create_sheet("New Labels")
+    _write_header_row(ws_new, ["Label", "Sublabel", "Source", "Description", "Created by"], FILL_HDR_NEW)
+    for i, t in enumerate(new_labels, start=2):
+        ws_new.cell(i, 1, t.label).fill             = FILL_NEW_LABEL
+        ws_new.cell(i, 2, t.sublabel).fill          = FILL_NEW_LABEL
+        ws_new.cell(i, 3, t.source or "").fill      = FILL_NEW_LABEL
+        ws_new.cell(i, 4, t.description or "").fill = FILL_NEW_LABEL
+        ws_new.cell(i, 5, creators.get(t.id, "")).fill = FILL_NEW_LABEL
+    _autofit(ws_new)
 
     buf = io.BytesIO()
     wb.save(buf)
