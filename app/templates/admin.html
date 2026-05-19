@@ -195,7 +195,9 @@ async function checkUpdate() {
     const apply = document.getElementById('btn-apply');
     panel.style.display = 'block';
 
-    let html = `<strong>Installed:</strong> ${d.current_version} <span class="muted">(${d.current_commit})</span>`;
+    let html = `<strong>Installed:</strong> ${d.current_version}`;
+    if (d.current_commit) html += ` <span class="muted">(${d.current_commit})</span>`;
+    if (!d.has_git) html += ` &nbsp;<span style="background:#fff3cd;border:1px solid #ffc107;border-radius:4px;padding:0.1rem 0.4rem;font-size:0.78rem;color:#856404">zip deployment — git not available</span>`;
     if (d.latest_release) {
       html += `<br><strong>Latest release:</strong> <a href="${d.latest_release.url}" target="_blank">${d.latest_release.name} (${d.latest_release.tag})</a>`;
     }
@@ -204,8 +206,10 @@ async function checkUpdate() {
       status.textContent = 'Up to date';
       apply.style.display = 'none';
     } else {
-      html += `<br><span style="color:#e67e22;font-weight:600">&#9654; ${d.commits_behind} new commit(s) available.</span>`;
-      status.textContent = `${d.commits_behind} commit(s) behind`;
+      const behind = d.commits_behind != null ? `${d.commits_behind} new commit(s) available` : 'update available';
+      html += `<br><span style="color:#e67e22;font-weight:600">&#9654; ${behind}.</span>`;
+      if (!d.has_git) html += `<br><span class="muted" style="font-size:0.82rem">Will download the release zip from GitHub and copy files over (database and .env are preserved).</span>`;
+      status.textContent = behind;
       apply.style.display = 'inline-block';
     }
     panel.innerHTML = html;

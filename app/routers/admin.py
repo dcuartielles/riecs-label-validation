@@ -327,12 +327,48 @@ async def set_admin(
     return RedirectResponse(url="/admin", status_code=302)
 
 
+def _fetch_latest_release(json_mod) -> dict | None:
+    import urllib.request
+    try:
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
+            headers={"Accept": "application/vnd.github+json", "User-Agent": "riecs-admin"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json_mod.loads(resp.read())
+    except Exception:
+        return None
+
+
+# Files/dirs never overwritten during a zip-based update
+_PROTECTED = {"labelling.db", ".env", "output", "server.log", "__pycache__"}
+
+
 @router.get("/admin/check-update")
 async def check_update(request: Request):
-    import subprocess, urllib.request, json as _json
+    import subprocess, json as _json
     user = await require_admin(request)
     if not user:
         return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+    has_git = (PROJECT_ROOT / ".git").exists()
+    latest_release = _fetch_latest_release(_json)
+    rel_info = {
+        "tag":          latest_release["tag_name"],
+        "name":         latest_release["name"],
+        "url":          latest_release["html_url"],
+        "published_at": latest_release["published_at"],
+    } if latest_release else None
+
+    if not has_git:
+        return JSONResponse({
+            "has_git":        False,
+            "current_version": "zip deployment (version unknown)",
+            "current_commit":  None,
+            "up_to_date":      False,
+            "commits_behind":  None,
+            "latest_release":  rel_info,
+        })
 
     def git(*args):
         return subprocess.run(
@@ -342,65 +378,98 @@ async def check_update(request: Request):
         )
 
     git("fetch", "origin", "--quiet")
-
     local  = git("rev-parse", "HEAD").stdout.strip()
     remote = git("rev-parse", "origin/master").stdout.strip()
-
-    tag_res = git("describe", "--tags", "--exact-match", "HEAD")
+    tag_res   = git("describe", "--tags", "--exact-match", "HEAD")
     tag_local = tag_res.stdout.strip() if tag_res.returncode == 0 else local[:8]
-
-    behind = git("log", "HEAD..origin/master", "--oneline").stdout.strip()
-    commits_behind = len(behind.splitlines()) if behind else 0
-
-    latest_release = None
-    try:
-        req = urllib.request.Request(
-            f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
-            headers={"Accept": "application/vnd.github+json", "User-Agent": "riecs-admin"},
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            latest_release = _json.loads(resp.read())
-    except Exception:
-        pass
+    behind    = git("log", "HEAD..origin/master", "--oneline").stdout.strip()
 
     return JSONResponse({
+        "has_git":        True,
         "current_version": tag_local,
         "current_commit":  local[:8],
         "up_to_date":      local == remote,
-        "commits_behind":  commits_behind,
-        "latest_release":  {
-            "tag":          latest_release["tag_name"],
-            "name":         latest_release["name"],
-            "url":          latest_release["html_url"],
-            "published_at": latest_release["published_at"],
-        } if latest_release else None,
+        "commits_behind":  len(behind.splitlines()) if behind else 0,
+        "latest_release":  rel_info,
     })
 
 
 @router.post("/admin/do-update")
 async def do_update(request: Request):
-    import subprocess
+    import subprocess, urllib.request, zipfile, io, shutil, json as _json
     user = await require_admin(request)
     if not user:
         return JSONResponse({"error": "unauthorized"}, status_code=401)
 
+    has_git = (PROJECT_ROOT / ".git").exists()
+
+    if has_git:
+        try:
+            result = subprocess.run(
+                ["git", "pull", "origin", "master"],
+                capture_output=True, text=True, timeout=60,
+                cwd=str(PROJECT_ROOT),
+            )
+            success = result.returncode == 0
+            output  = (result.stdout + result.stderr).strip()
+            return JSONResponse({
+                "success": success,
+                "output":  output,
+                "message": "Update applied — server is reloading." if success else "Update failed.",
+            })
+        except subprocess.TimeoutExpired:
+            return JSONResponse({"success": False, "output": "", "message": "git pull timed out (60 s)."})
+        except Exception as e:
+            return JSONResponse({"success": False, "output": str(e), "message": "Unexpected error."})
+
+    # ── Zip-based update (no git) ──────────────────────────────────────────
     try:
-        result = subprocess.run(
-            ["git", "pull", "origin", "master"],
-            capture_output=True, text=True, timeout=60,
-            cwd=str(PROJECT_ROOT),
-        )
-        success = result.returncode == 0
-        output  = (result.stdout + result.stderr).strip()
+        release = _fetch_latest_release(_json)
+        if not release:
+            return JSONResponse({"success": False, "output": "", "message": "Could not reach GitHub API."})
+
+        zipball_url = release["zipball_url"]
+        log = [f"Downloading {release['name']} ({release['tag_name']}) from GitHub…"]
+
+        req = urllib.request.Request(zipball_url, headers={"User-Agent": "riecs-admin"})
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            zip_bytes = resp.read()
+
+        log.append(f"Downloaded {len(zip_bytes) // 1024} KB. Extracting…")
+
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+            names  = zf.namelist()
+            prefix = names[0].split("/")[0] + "/"   # e.g. "owner-repo-abc123/"
+            copied = skipped = 0
+
+            for name in names:
+                rel = name[len(prefix):]             # strip the GitHub top-level folder
+                if not rel:
+                    continue
+                top = rel.split("/")[0]
+                if top in _PROTECTED:
+                    skipped += 1
+                    continue
+                target = PROJECT_ROOT / rel
+                if name.endswith("/"):
+                    target.mkdir(parents=True, exist_ok=True)
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    with zf.open(name) as src, open(target, "wb") as dst:
+                        dst.write(src.read())
+                    copied += 1
+
+        log.append(f"Done — {copied} files updated, {skipped} protected files preserved.")
+        log.append("Server is reloading with the new code.")
         return JSONResponse({
-            "success": success,
-            "output":  output,
-            "message": "Update applied — server is reloading." if success else "Update failed.",
+            "success": True,
+            "output":  "\n".join(log),
+            "message": "Update applied — server is reloading.",
         })
-    except subprocess.TimeoutExpired:
-        return JSONResponse({"success": False, "output": "", "message": "git pull timed out (60 s)."})
+
     except Exception as e:
-        return JSONResponse({"success": False, "output": str(e), "message": "Unexpected error."})
+        return JSONResponse({"success": False, "output": str(e), "message": "Update failed."})
+
 
 
 @router.get("/admin/download-db")
