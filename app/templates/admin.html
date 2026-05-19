@@ -167,4 +167,80 @@
 </section>
 {% endif %}
 
+<!-- ── Software update ── -->
+<section class="admin-section">
+  <h2>Software update</h2>
+  <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;margin-bottom:0.75rem">
+    <button class="btn" id="btn-check" onclick="checkUpdate()">Check for updates</button>
+    <span id="upd-status" class="muted" style="font-size:0.85rem"></span>
+  </div>
+  <div id="upd-panel" style="display:none;font-size:0.87rem;line-height:1.9;margin-bottom:0.75rem"></div>
+  <button class="btn btn-finish" id="btn-apply" style="display:none;margin-bottom:0.75rem" onclick="applyUpdate()">
+    Apply update &amp; reload server
+  </button>
+  <pre id="upd-log" style="display:none;background:#f4f6f8;border:1px solid var(--border);border-radius:6px;padding:0.6rem 0.8rem;font-size:0.78rem;white-space:pre-wrap;color:#333;max-height:200px;overflow-y:auto;margin:0 0 0.75rem"></pre>
+  <div>
+    <a href="/admin/download-db" class="btn" style="font-size:0.82rem">Download database</a>
+  </div>
+</section>
+
+<script>
+async function checkUpdate() {
+  const btn = document.getElementById('btn-check');
+  const status = document.getElementById('upd-status');
+  btn.disabled = true; status.textContent = 'Checking…';
+  try {
+    const d = await fetch('/admin/check-update').then(r => r.json());
+    const panel = document.getElementById('upd-panel');
+    const apply = document.getElementById('btn-apply');
+    panel.style.display = 'block';
+
+    let html = `<strong>Installed:</strong> ${d.current_version} <span class="muted">(${d.current_commit})</span>`;
+    if (d.latest_release) {
+      html += `<br><strong>Latest release:</strong> <a href="${d.latest_release.url}" target="_blank">${d.latest_release.name} (${d.latest_release.tag})</a>`;
+    }
+    if (d.up_to_date) {
+      html += `<br><span style="color:#27ae60;font-weight:600">&#10003; Server is up to date.</span>`;
+      status.textContent = 'Up to date';
+      apply.style.display = 'none';
+    } else {
+      html += `<br><span style="color:#e67e22;font-weight:600">&#9654; ${d.commits_behind} new commit(s) available.</span>`;
+      status.textContent = `${d.commits_behind} commit(s) behind`;
+      apply.style.display = 'inline-block';
+    }
+    panel.innerHTML = html;
+  } catch(e) {
+    status.textContent = 'Error — check server logs';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function applyUpdate() {
+  const btn    = document.getElementById('btn-apply');
+  const log    = document.getElementById('upd-log');
+  const status = document.getElementById('upd-status');
+  btn.disabled = true; btn.textContent = 'Updating…';
+  log.style.display = 'block'; log.textContent = 'Running git pull origin master…\n';
+  try {
+    const d = await fetch('/admin/do-update', { method: 'POST' }).then(r => r.json());
+    log.textContent += (d.output || '') + '\n\n' + d.message;
+    status.textContent = d.message;
+    if (d.success) {
+      btn.textContent = 'Reloading in 5 s…';
+      let s = 5;
+      const t = setInterval(() => {
+        btn.textContent = `Reloading in ${--s} s…`;
+        if (s <= 0) { clearInterval(t); location.reload(); }
+      }, 1000);
+    } else {
+      btn.disabled = false; btn.textContent = 'Retry';
+    }
+  } catch(e) {
+    log.textContent += '\nNetwork error.';
+    btn.disabled = false; btn.textContent = 'Apply update & reload server';
+  }
+}
+</script>
+
 {% endblock %}

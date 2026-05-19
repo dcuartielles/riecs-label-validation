@@ -21,7 +21,9 @@ from app.models import (
 
 router = APIRouter()
 
-RANDOM_SEED = 42
+RANDOM_SEED  = 42
+PROJECT_ROOT = Path(__file__).parent.parent
+GITHUB_REPO  = "dcuartielles/riecs-label-validation"
 
 
 async def require_admin(request: Request):
@@ -323,6 +325,82 @@ async def set_admin(
             await db.commit()
 
     return RedirectResponse(url="/admin", status_code=302)
+
+
+@router.get("/admin/check-update")
+async def check_update(request: Request):
+    import subprocess, urllib.request, json as _json
+    user = await require_admin(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+    def git(*args):
+        return subprocess.run(
+            ["git"] + list(args),
+            capture_output=True, text=True, timeout=30,
+            cwd=str(PROJECT_ROOT),
+        )
+
+    git("fetch", "origin", "--quiet")
+
+    local  = git("rev-parse", "HEAD").stdout.strip()
+    remote = git("rev-parse", "origin/master").stdout.strip()
+
+    tag_res = git("describe", "--tags", "--exact-match", "HEAD")
+    tag_local = tag_res.stdout.strip() if tag_res.returncode == 0 else local[:8]
+
+    behind = git("log", "HEAD..origin/master", "--oneline").stdout.strip()
+    commits_behind = len(behind.splitlines()) if behind else 0
+
+    latest_release = None
+    try:
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
+            headers={"Accept": "application/vnd.github+json", "User-Agent": "riecs-admin"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            latest_release = _json.loads(resp.read())
+    except Exception:
+        pass
+
+    return JSONResponse({
+        "current_version": tag_local,
+        "current_commit":  local[:8],
+        "up_to_date":      local == remote,
+        "commits_behind":  commits_behind,
+        "latest_release":  {
+            "tag":          latest_release["tag_name"],
+            "name":         latest_release["name"],
+            "url":          latest_release["html_url"],
+            "published_at": latest_release["published_at"],
+        } if latest_release else None,
+    })
+
+
+@router.post("/admin/do-update")
+async def do_update(request: Request):
+    import subprocess
+    user = await require_admin(request)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+    try:
+        result = subprocess.run(
+            ["git", "pull", "origin", "master"],
+            capture_output=True, text=True, timeout=60,
+            cwd=str(PROJECT_ROOT),
+        )
+        success = result.returncode == 0
+        output  = (result.stdout + result.stderr).strip()
+        return JSONResponse({
+            "success": success,
+            "output":  output,
+            "message": "Update applied — server is reloading." if success else "Update failed.",
+        })
+    except subprocess.TimeoutExpired:
+        return JSONResponse({"success": False, "output": "", "message": "git pull timed out (60 s)."})
+    except Exception as e:
+        return JSONResponse({"success": False, "output": str(e), "message": "Unexpected error."})
 
 
 @router.get("/admin/download-db")
