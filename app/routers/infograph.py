@@ -252,21 +252,46 @@ async def infograph_data(
             con_freq[c.strip()] += 1
         sid_cons[mc.story_id] = mc.concepts
 
-    # Concept → tech label mapping
+    # story_id → list of target_user values (from mandatory classifications)
+    sid_target_users: dict[int, list[str]] = defaultdict(list)
+    for mc in mc_rows:
+        if not include_rejected and mc.story_id in rejected_sids:
+            continue
+        if mc.target_user:
+            sid_target_users[mc.story_id].append(mc.target_user.strip())
+
+    # Concept → tech label mapping  /  target_user → label mapping
     con_tech: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    tut_tech: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    tut_all:  dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
     for al in rows:
         if not al.taxonomy_label or not al.taxonomy_label.sublabel:
             continue
         if not include_rejected and al.story_id in rejected_sids:
             continue
         sub  = al.taxonomy_label.sublabel.strip()
-        main = sub_to_main.get(sub, "")
-        if main in MANDATORY_CATS:
-            continue
+        main = sub_to_main.get(sub, al.taxonomy_label.label or "")
+        is_tech = main not in MANDATORY_CATS
         group_id = al.user.group_id if al.user else None
         weight = rel_weights.get((al.story_id, group_id), 1.0) if group_id else 1.0
-        for c in sid_cons.get(al.story_id, []):
-            con_tech[c.strip()][sub] += weight
+        if is_tech:
+            for c in sid_cons.get(al.story_id, []):
+                con_tech[c.strip()][sub] += weight
+        for tu in sid_target_users.get(al.story_id, []):
+            tut_all[tu][sub] += weight
+            if is_tech:
+                tut_tech[tu][sub] += weight
+
+    # Add User Story Concept labels into tut_all (for the non-tech toggle)
+    # Target user in story is intentionally excluded — it's already the X axis
+    for mc in mc_rows:
+        if not include_rejected and mc.story_id in rejected_sids:
+            continue
+        if not mc.target_user:
+            continue
+        tu = mc.target_user.strip()
+        for c in mc.concepts:
+            tut_all[tu][c.strip()] += 1
 
     # ── Serialise ──────────────────────────────────────────────────────────
     def items(d, n=100):
@@ -313,20 +338,34 @@ async def infograph_data(
         for co, ld in sorted(con_tech.items(), key=lambda x: -sum(x[1].values()))[:10]
     }
 
+    tut_tech_serial = {
+        tu: [{"sublabel": s, "count": round(c), "main_category": sub_to_main.get(s,""), "color": _col(sub_to_main.get(s,""))}
+             for s, c in sorted(ld.items(), key=lambda x: -x[1])[:20]]
+        for tu, ld in sorted(tut_tech.items(), key=lambda x: -sum(x[1].values()))
+    }
+
+    tut_all_serial = {
+        tu: [{"sublabel": s, "count": round(c), "main_category": sub_to_main.get(s,""), "color": _col(sub_to_main.get(s,""))}
+             for s, c in sorted(ld.items(), key=lambda x: -x[1])[:20]]
+        for tu, ld in sorted(tut_all.items(), key=lambda x: -sum(x[1].values()))
+    }
+
     dec_c = sum(1 for d in dec_rows if d.decision == "confirm")
     dec_r = sum(1 for d in dec_rows if d.decision == "reject")
 
     return JSONResponse({
-        "label_freq":         items(freq, 100),
-        "tech_label_freq":    items(tech_freq, 100),
-        "cooccurrence":       links(cooc, top50),
-        "tech_cooccurrence":  links(t_cooc, top50_tech),
-        "target_user_freq":   [{"sublabel": k, "count": v} for k, v in sorted(tu_freq.items(), key=lambda x: -x[1])],
-        "concept_freq":       [{"concept": k, "count": v} for k, v in sorted(con_freq.items(), key=lambda x: -x[1])],
-        "partner_main_freq":   pm_serial,
-        "user_type_tech_freq": ut_serial,
-        "user_type_all_freq":  ut_all_serial,
-        "concept_tech_freq":   con_serial,
+        "label_freq":              items(freq, 100),
+        "tech_label_freq":         items(tech_freq, 100),
+        "cooccurrence":            links(cooc, top50),
+        "tech_cooccurrence":       links(t_cooc, top50_tech),
+        "target_user_freq":        [{"sublabel": k, "count": v} for k, v in sorted(tu_freq.items(), key=lambda x: -x[1])],
+        "concept_freq":            [{"concept": k, "count": v} for k, v in sorted(con_freq.items(), key=lambda x: -x[1])],
+        "partner_main_freq":       pm_serial,
+        "user_type_tech_freq":     ut_serial,
+        "user_type_all_freq":      ut_all_serial,
+        "concept_tech_freq":       con_serial,
+        "target_user_tech_freq":   tut_tech_serial,
+        "target_user_all_freq":    tut_all_serial,
         "peer_review":        {"confirm": dec_c, "reject": dec_r},
         "categories":         [{"name": k, "color": v} for k, v in CAT_COLOURS.items()],
         "total_stories":      len(s_all),

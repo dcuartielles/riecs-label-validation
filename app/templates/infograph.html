@@ -235,16 +235,24 @@ main { max-width: 1160px; }
 <!-- C16: User Types -->
 <div class="ig-panel" id="panel-utypes">
   <div class="chart-card">
-    <h2>C16 — Technical Labels by User Type</h2>
-    <p class="chart-sub">Top 15 technical labels per user type, sized by count. Toggle to include mandatory classification labels.</p>
+    <h2>C16 — Technical Labels by Target User Type</h2>
+    <p class="chart-sub">Rows = technical labels; columns = "Target user in story" categories (mandatory classification). Cell = number of label assignments on stories classified with that user type.</p>
     <label style="display:inline-flex;align-items:center;gap:0.4rem;cursor:pointer;font-size:0.83rem;margin-bottom:0.75rem">
       <input type="checkbox" id="show-nontech" onchange="renderUtypes()">
-      Include non-technical labels (User Story Concept &amp; Target user in story)
+      Include User Story Concept labels
     </label>
     <div class="chart-scroll"><svg id="c16-svg"></svg></div>
   </div>
+  <div class="chart-card" style="margin-top:0">
+    <h2>C16 — 3D Surface</h2>
+    <p class="chart-sub">Same data as the heatmap above shown as a height mesh. Drag to rotate.</p>
+    <div id="c16-3d-wrap" style="position:relative;border-radius:8px;overflow:hidden;background:#0d0d1a;height:520px;cursor:grab">
+      <canvas id="c16-3d-canvas" style="display:block;width:100%;height:100%"></canvas>
+    </div>
+  </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
 <script>
 // ── Globals ──────────────────────────────────────────────────────────────────
@@ -269,11 +277,349 @@ function onRejectionToggle() {
   loadData();
 }
 
+function transposedHeatmap(svgId, byUserType, userTypeFilterKey) {
+  // Labels on Y axis, user types on X axis
+  const userTypes = Object.keys(byUserType);
+  if (!userTypes.length) {
+    d3.select("#"+svgId).attr("width",300).attr("height",40)
+      .append("text").attr("x",10).attr("y",28).style("fill","#aaa").style("font-size","13px").text("No data");
+    return;
+  }
+
+  const labelTotals = {}, labelColors = {};
+  userTypes.forEach(ut => {
+    byUserType[ut].forEach(d => {
+      labelTotals[d.sublabel] = (labelTotals[d.sublabel] || 0) + d.count;
+      if (!labelColors[d.sublabel]) labelColors[d.sublabel] = d.color;
+    });
+  });
+  const allLabels = Object.entries(labelTotals).sort((a,b)=>b[1]-a[1]).slice(0,25).map(e=>e[0]);
+  if (!allLabels.length) return;
+
+  // Build lookup: ut -> sublabel -> count
+  const lookup = {};
+  userTypes.forEach(ut => {
+    lookup[ut] = {};
+    byUserType[ut].forEach(d => { lookup[ut][d.sublabel] = d.count; });
+  });
+
+  const cellW = Math.max(38, Math.floor(700 / userTypes.length));
+  const cellH = 22;
+  const padL = 240;
+  const padT = 120;
+  const W = userTypes.length * cellW + padL + 24;
+  const H = allLabels.length * cellH + padT + 16;
+  const maxV = d3.max(userTypes.flatMap(ut => Object.values(lookup[ut]).map(Number))) || 1;
+  const colorScale = v => d3.interpolateBlues(v / maxV);
+
+  const svg = d3.select("#"+svgId).attr("width",W).attr("height",H);
+  svg.selectAll("*").remove();
+  const g = svg.append("g").attr("transform",`translate(${padL},${padT})`);
+
+  allLabels.forEach((lbl, li) => {
+    // Category colour strip on left edge
+    g.append("rect").attr("x",-6).attr("y",li*cellH).attr("width",3).attr("height",cellH-1)
+      .attr("fill", labelColors[lbl] || "#ccc");
+
+    userTypes.forEach((ut, ui) => {
+      const v = lookup[ut][lbl] || 0;
+      g.append("rect").attr("x",ui*cellW).attr("y",li*cellH).attr("width",cellW-1).attr("height",cellH-1)
+        .attr("fill", v ? colorScale(v) : "#f5f7f9").attr("rx",2)
+        .on("mouseover",ev=>showTip(ev,`<strong>${lbl}</strong><br>${ut}<br>Count: <strong>${v}</strong>`))
+        .on("mousemove",moveTip).on("mouseout",hideTip);
+      if (v) {
+        g.append("text").attr("x",ui*cellW+cellW/2).attr("y",li*cellH+cellH/2+4)
+          .attr("text-anchor","middle").style("font-size","7px")
+          .style("fill",v>maxV*0.5?"#fff":"#333").text(v);
+      }
+    });
+
+    // Row label
+    svg.append("text").attr("x",padL-11).attr("y",padT+li*cellH+cellH/2+4)
+      .attr("text-anchor","end").style("font-size","9px").style("fill","#333")
+      .text(lbl.length>32?lbl.slice(0,31)+"…":lbl);
+  });
+
+  // Column labels (user types, rotated -45°)
+  userTypes.forEach((ut, ui) => {
+    const xPos = padL + ui*cellW + cellW/2;
+    svg.append("text").attr("x",xPos).attr("y",padT-4)
+      .attr("text-anchor","start")
+      .attr("transform",`rotate(-45,${xPos},${padT-4})`)
+      .style("font-size","9px").style("fill","#333")
+      .style("cursor", userTypeFilterKey ? "pointer" : "default")
+      .text(ut.length>22?ut.slice(0,21)+"…":ut)
+      .on("click", userTypeFilterKey ? ()=>setFilter(userTypeFilterKey, ut) : null)
+      .on("mouseover", userTypeFilterKey ? ev=>showTip(ev,`Filter by: <strong>${ut}</strong>`) : null)
+      .on("mousemove",moveTip).on("mouseout",hideTip);
+  });
+}
+
 function renderUtypes() {
   if (!gData) return;
   const showAll = document.getElementById("show-nontech")?.checked;
-  const data = showAll ? gData.user_type_all_freq : gData.user_type_tech_freq;
-  groupedHeatmap("c16-svg", data, "target_user");
+  const data = showAll ? gData.target_user_all_freq : gData.target_user_tech_freq;
+  transposedHeatmap("c16-svg", data, null);
+  render3DMesh("c16-3d-wrap", "c16-3d-canvas", data);
+}
+
+function render3DMesh(containerId, canvasId, byUserType) {
+  if (!window.THREE) return;
+  const container = document.getElementById(containerId);
+  const canvas   = document.getElementById(canvasId);
+  if (!container || !canvas) return;
+
+  // Dispose previous renderer/listeners
+  if (container._3dDispose) { container._3dDispose(); delete container._3dDispose; }
+
+  const userTypes = Object.keys(byUserType);
+  if (!userTypes.length) return;
+
+  // Aggregate label totals across all user types
+  const labelTotals = {}, labelColors = {};
+  userTypes.forEach(ut => byUserType[ut].forEach(d => {
+    labelTotals[d.sublabel] = (labelTotals[d.sublabel] || 0) + d.count;
+    if (!labelColors[d.sublabel]) labelColors[d.sublabel] = d.color;
+  }));
+  const allLabels = Object.entries(labelTotals).sort((a,b)=>b[1]-a[1]).slice(0,25).map(e=>e[0]);
+  if (!allLabels.length) return;
+
+  const lookup = {};
+  userTypes.forEach(ut => {
+    lookup[ut] = {};
+    byUserType[ut].forEach(d => { lookup[ut][d.sublabel] = d.count; });
+  });
+
+  const nU = userTypes.length, nL = allLabels.length;
+  const maxV = Math.max(...userTypes.flatMap(ut => allLabels.map(l => lookup[ut][l] || 0)), 1);
+
+  // Renderer
+  const W = container.clientWidth || 700, H = 520;
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setSize(W, H, false);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setClearColor(0x0d0d1a);
+
+  const scene  = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(45, W / H, 0.1, 500);
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+  const dl = new THREE.DirectionalLight(0xffffff, 0.9);
+  dl.position.set(12, 22, 10); scene.add(dl);
+
+  const cX = 1.0, cZ = 0.65, hS = 6.0; // cell widths and height scale
+
+  // Blue gradient matching D3 interpolateBlues
+  function blueGrad(v) {
+    const stops = [[247,251,255],[198,219,239],[107,174,214],[33,113,181],[8,48,107]];
+    const t  = v * (stops.length - 1);
+    const i  = Math.min(Math.floor(t), stops.length - 2);
+    const f  = t - i;
+    const a = stops[i], b = stops[i + 1];
+    return [(a[0]+f*(b[0]-a[0]))/255, (a[1]+f*(b[1]-a[1]))/255, (a[2]+f*(b[2]-a[2]))/255];
+  }
+
+  // Build mesh: X = user type index, Z = label index, Y = height
+  const pos = [], col = [], idx = [];
+  for (let ui = 0; ui < nU; ui++) {
+    for (let li = 0; li < nL; li++) {
+      const v = (lookup[userTypes[ui]][allLabels[li]] || 0) / maxV;
+      pos.push(ui * cX, v * hS, li * cZ);
+      const [r,g,b] = blueGrad(v); col.push(r,g,b);
+    }
+  }
+  for (let ui = 0; ui < nU-1; ui++) {
+    for (let li = 0; li < nL-1; li++) {
+      const a=ui*nL+li, b=(ui+1)*nL+li, c=ui*nL+li+1, d=(ui+1)*nL+li+1;
+      idx.push(a,b,c, b,d,c);
+    }
+  }
+
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geom.setAttribute('color',    new THREE.Float32BufferAttribute(col, 3));
+  geom.setIndex(idx);
+  geom.computeVertexNormals();
+
+  scene.add(new THREE.Mesh(geom, new THREE.MeshPhongMaterial({
+    vertexColors: true, side: THREE.DoubleSide, shininess: 70,
+  })));
+  scene.add(new THREE.Mesh(geom, new THREE.MeshBasicMaterial({
+    color: 0xffffff, wireframe: true, opacity: 0.07, transparent: true,
+  })));
+
+  // Dark floor plane
+  const fgeo = new THREE.PlaneGeometry((nU-1)*cX+3, (nL-1)*cZ+3);
+  const floor = new THREE.Mesh(fgeo, new THREE.MeshBasicMaterial({color:0x111122,side:THREE.DoubleSide}));
+  floor.rotation.x = -Math.PI/2;
+  floor.position.set((nU-1)*cX/2, -0.02, (nL-1)*cZ/2);
+  scene.add(floor);
+
+  // Glow-dot pick targets at each vertex
+  (function() {
+    const c = document.createElement('canvas'); c.width = c.height = 64;
+    const ctx = c.getContext('2d');
+    const g = ctx.createRadialGradient(32,32,2,32,32,28);
+    g.addColorStop(0,'rgba(190,215,255,0.95)'); g.addColorStop(0.45,'rgba(90,150,255,0.5)'); g.addColorStop(1,'rgba(30,80,200,0)');
+    ctx.fillStyle = g; ctx.fillRect(0,0,64,64);
+    const ptGeom = new THREE.BufferGeometry();
+    ptGeom.setAttribute('position', new THREE.Float32BufferAttribute(pos.slice(), 3));
+    const ptMat  = new THREE.PointsMaterial({ size:0.28, map:new THREE.CanvasTexture(c), transparent:true, depthWrite:false, sizeAttenuation:true });
+    container._ptMesh = new THREE.Points(ptGeom, ptMat);
+    scene.add(container._ptMesh);
+  })();
+
+  // Hover tooltip element
+  const ttip = document.createElement('div');
+  ttip.style.cssText = 'position:absolute;pointer-events:none;display:none;background:rgba(8,8,26,0.93);color:#dde;border:1px solid #3355aa;border-radius:7px;padding:0.35rem 0.65rem;font-size:0.8rem;line-height:1.6;white-space:nowrap;z-index:10;box-shadow:0 3px 12px rgba(0,0,0,0.6)';
+  container.appendChild(ttip);
+
+  const raycaster = new THREE.Raycaster();
+  raycaster.params.Points.threshold = 0.4;
+
+  // Text-sprite helper
+  function makeSprite(text) {
+    const c = document.createElement('canvas');
+    c.width = 512; c.height = 76;
+    const ctx = c.getContext('2d');
+    ctx.font = 'bold 22px sans-serif';
+    ctx.fillStyle = '#c8c8ee';
+    ctx.fillText(text.length > 23 ? text.slice(0,22)+'…' : text, 6, 54);
+    const spr = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false,
+    }));
+    spr.scale.set(3.2, 0.55, 1);
+    return spr;
+  }
+
+  // User-type labels along the far-Z edge (one per X column)
+  userTypes.forEach((ut, ui) => {
+    const spr = makeSprite(ut);
+    spr.position.set(ui * cX, 0.4, (nL - 1) * cZ + 1.2);
+    scene.add(spr);
+  });
+
+  // Label-name sprites along the left edge (one per Z row)
+  allLabels.forEach((lbl, li) => {
+    const spr = makeSprite(lbl);
+    spr.position.set(-2.4, 0.4, li * cZ);
+    scene.add(spr);
+  });
+
+  // Camera orbit (spherical)
+  const cx = (nU-1)*cX/2, cz = (nL-1)*cZ/2;
+  const center = new THREE.Vector3(cx, hS*0.25, cz);
+  const R = Math.max((nU-1)*cX, (nL-1)*cZ) * 1.4 + 7;
+  let theta = -0.55, phi = 1.05, r = R;
+  const rMin = R * 0.25, rMax = R * 2.8;
+
+  function posCamera() {
+    camera.position.set(
+      cx + r * Math.sin(phi) * Math.sin(theta),
+      center.y + r * Math.cos(phi) + hS * 0.15,
+      cz + r * Math.sin(phi) * Math.cos(theta)
+    );
+    camera.lookAt(center);
+    renderer.render(scene, camera);
+  }
+  posCamera();
+
+  // Drag to rotate
+  let drag = false, px = 0, py = 0;
+  const evX = e => e.touches ? e.touches[0].clientX : e.clientX;
+  const evY = e => e.touches ? e.touches[0].clientY : e.clientY;
+
+  const onDown = e => {
+    drag = true; px = evX(e); py = evY(e);
+    container.style.cursor = 'grabbing';
+    e.preventDefault();
+  };
+  const onUp = () => { drag = false; container.style.cursor = 'grab'; };
+  const onMove = e => {
+    if (!drag) return;
+    const x = evX(e), y = evY(e);
+    theta -= (x - px) * 0.008;
+    phi = Math.max(0.12, Math.min(Math.PI/2 - 0.04, phi - (y - py) * 0.007));
+    px = x; py = y;
+    posCamera();
+  };
+
+  // Scroll-wheel zoom
+  const onWheel = e => {
+    r = Math.max(rMin, Math.min(rMax, r * (1 + e.deltaY * 0.001)));
+    posCamera();
+    e.preventDefault();
+  };
+
+  // Pinch-to-zoom (touch)
+  let lastPinchDist = null;
+  const onTouchMove = e => {
+    if (e.touches.length === 2) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      if (lastPinchDist !== null) {
+        r = Math.max(rMin, Math.min(rMax, r * (lastPinchDist / dist)));
+        posCamera();
+      }
+      lastPinchDist = dist;
+      e.preventDefault();
+    } else {
+      lastPinchDist = null;
+      onMove(e);
+    }
+  };
+  const onTouchEnd = e => { lastPinchDist = null; onUp(); };
+
+  // Hover: raycast against glow dots, show tooltip when not dragging
+  const onHover = e => {
+    if (drag) { ttip.style.display = 'none'; return; }
+    const rect = canvas.getBoundingClientRect();
+    const ndc  = new THREE.Vector2(
+      ((e.clientX - rect.left) / rect.width)  *  2 - 1,
+      ((e.clientY - rect.top)  / rect.height) * -2 + 1
+    );
+    raycaster.setFromCamera(ndc, camera);
+    const hits = raycaster.intersectObject(container._ptMesh);
+    if (hits.length) {
+      const i  = hits[0].index;
+      const ui = Math.floor(i / nL), li = i % nL;
+      const count = lookup[userTypes[ui]][allLabels[li]] || 0;
+      if (!count) { ttip.style.display = 'none'; return; }
+      ttip.innerHTML = `<strong>${allLabels[li]}</strong><br><span style="color:#99bbee">${userTypes[ui]}</span><br>Count: <strong>${count}</strong>`;
+      ttip.style.display = 'block';
+      const cx2 = e.clientX - rect.left, cy2 = e.clientY - rect.top;
+      ttip.style.left = (cx2 + 14) + 'px';
+      ttip.style.top  = (cy2 > 70 ? cy2 - 68 : cy2 + 16) + 'px';
+    } else {
+      ttip.style.display = 'none';
+    }
+  };
+  const onLeave = () => { ttip.style.display = 'none'; };
+
+  canvas.addEventListener('mousedown',  onDown);
+  canvas.addEventListener('touchstart', onDown, { passive: false });
+  canvas.addEventListener('wheel',      onWheel, { passive: false });
+  canvas.addEventListener('mousemove',  onHover);
+  canvas.addEventListener('mouseleave', onLeave);
+  window.addEventListener('mouseup',    onUp);
+  window.addEventListener('touchend',   onTouchEnd);
+  window.addEventListener('mousemove',  onMove);
+  canvas.addEventListener('touchmove',  onTouchMove, { passive: false });
+
+  container._3dDispose = () => {
+    canvas.removeEventListener('mousedown',  onDown);
+    canvas.removeEventListener('touchstart', onDown);
+    canvas.removeEventListener('wheel',      onWheel);
+    canvas.removeEventListener('mousemove',  onHover);
+    canvas.removeEventListener('mouseleave', onLeave);
+    window.removeEventListener('mouseup',    onUp);
+    window.removeEventListener('touchend',   onTouchEnd);
+    window.removeEventListener('mousemove',  onMove);
+    canvas.removeEventListener('touchmove',  onTouchMove);
+    if (ttip.parentNode) ttip.parentNode.removeChild(ttip);
+    renderer.dispose();
+  };
 }
 
 // ── Filter state ──────────────────────────────────────────────────────────────
