@@ -7,7 +7,7 @@ from pathlib import Path
 from app.templates import templates
 
 from fastapi import APIRouter, Request, Form
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import select, func, delete
 from sqlalchemy.orm import selectinload
 
